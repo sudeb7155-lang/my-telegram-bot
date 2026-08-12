@@ -17,7 +17,7 @@ from telegram.ext import (
 
 # ================= CONFIGURATION =================
 BOT_TOKEN = "8995026167:AAH0lS5E05eQtm7s4vgYZPhy72Uv6cSdtl8"      # Paste your BotFather Token here
-ADMIN_ID =   6112720850                # Your numerical Telegram User ID
+ADMIN_ID =       6112720850            # Your numerical Telegram User ID
 
 # TUTORIAL VIDEO LINKS
 EARN_TUTORIAL_URL = "https://t.me/googlejobhubsudeb/3415"    # Video 1: "How to Earn"
@@ -81,6 +81,14 @@ def init_db():
 
 init_db()
 
+# Helper: Ensure User Exists in DB
+def ensure_user_exists(user_id: int):
+    conn = sqlite3.connect("rental_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    conn.commit()
+    conn.close()
+
 # Helper: Channel Membership Check
 async def check_channel_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     try:
@@ -111,15 +119,10 @@ SUPPORT_MSG = 6
 # 3. START & WELCOME MENU
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    
-    conn = sqlite3.connect("rental_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-    conn.commit()
-    conn.close()
+    ensure_user_exists(user_id)
 
     if not await check_channel_joined(user_id, context):
-        await send_join_prompt(user_id, context)
+        await send_join_prompt(update, context)
         return
 
     await send_welcome_menu(update, context)
@@ -166,7 +169,10 @@ async def handle_check_joined(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # 4. RENT MAIL FLOW
 async def start_rent(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_channel_joined(update.effective_user.id, context):
+    user_id = update.effective_user.id
+    ensure_user_exists(user_id)
+
+    if not await check_channel_joined(user_id, context):
         await send_join_prompt(update, context)
         return ConversationHandler.END
 
@@ -186,6 +192,8 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_cookies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['cookies'] = update.message.text.strip()
     user_id = update.effective_user.id
+    ensure_user_exists(user_id)
+
     gmail = context.user_data['gmail']
     password = context.user_data['password']
     cookies = context.user_data['cookies']
@@ -242,6 +250,7 @@ async def process_updated_cookies(update: Update, context: ContextTypes.DEFAULT_
     new_cookies = update.message.text.strip()
     task_id = context.user_data.get('update_task_id')
     user_id = update.effective_user.id
+    ensure_user_exists(user_id)
 
     conn = sqlite3.connect("rental_bot.db")
     cursor = conn.cursor()
@@ -280,8 +289,10 @@ async def process_updated_cookies(update: Update, context: ContextTypes.DEFAULT_
 # 6. ACCOUNT EARNING HISTORY
 async def earning_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    ensure_user_exists(user_id)
+
     if not await check_channel_joined(user_id, context):
-        await send_join_prompt(user_id, context)
+        await send_join_prompt(update, context)
         return
 
     conn = sqlite3.connect("rental_bot.db")
@@ -333,8 +344,11 @@ async def earning_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # 7. PAYMENT ADDRESS & WITHDRAWAL
 async def start_set_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_channel_joined(update.effective_user.id, context):
-        await send_join_prompt(update.effective_user.id, context)
+    user_id = update.effective_user.id
+    ensure_user_exists(user_id)
+
+    if not await check_channel_joined(user_id, context):
+        await send_join_prompt(user_id, context)
         return ConversationHandler.END
 
     await update.message.reply_text("⚙️ **Enter your UPI ID or USDT Wallet Address:**", parse_mode="Markdown")
@@ -343,6 +357,7 @@ async def start_set_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def save_payment_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
     address = update.message.text.strip()
     user_id = update.effective_user.id
+    ensure_user_exists(user_id)
 
     conn = sqlite3.connect("rental_bot.db")
     cursor = conn.cursor()
@@ -355,6 +370,8 @@ async def save_payment_address(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def start_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    ensure_user_exists(user_id)
+
     if not await check_channel_joined(user_id, context):
         await send_join_prompt(user_id, context)
         return ConversationHandler.END
@@ -415,8 +432,11 @@ async def process_withdrawal_amount(update: Update, context: ContextTypes.DEFAUL
 
 # 8. SUPPORT SYSTEM
 async def start_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_channel_joined(update.effective_user.id, context):
-        await send_join_prompt(update.effective_user.id, context)
+    user_id = update.effective_user.id
+    ensure_user_exists(user_id)
+
+    if not await check_channel_joined(user_id, context):
+        await send_join_prompt(user_id, context)
         return ConversationHandler.END
 
     await update.message.reply_text("💬 **Type your support message below:**")
@@ -453,6 +473,7 @@ async def handle_admin_decision(update: Update, context: ContextTypes.DEFAULT_TY
         cursor.execute("UPDATE gmail_rentals SET status = 'Accepted', is_active = 1, accepted_at = ? WHERE id = ?", (now, record_id))
         cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (record_id,))
         u_id, gmail = cursor.fetchone()
+        ensure_user_exists(u_id)
         conn.commit()
 
         await context.bot.send_message(chat_id=u_id, text=f"🎉 **Gmail Accepted!** (`{gmail}`). Task is now **🟢 Active**! 3h bonus timer started.", parse_mode="Markdown")
@@ -471,6 +492,7 @@ async def handle_admin_decision(update: Update, context: ContextTypes.DEFAULT_TY
         amount = float(data[2])
         cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (record_id,))
         u_id, gmail = cursor.fetchone()
+        ensure_user_exists(u_id)
         
         cursor.execute("UPDATE gmail_rentals SET total_earned = total_earned + ?, bonus_3h_given = 1, is_active = 0 WHERE id = ?", (amount, record_id))
         cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, u_id))
@@ -564,7 +586,7 @@ async def background_timer_job(context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
 
-    # 2. Check 24-Hour Expiration (Auto-deactivate & send offboarding prompt)
+    # 2. Check 24-Hour Expiration
     cursor.execute("SELECT id, user_id, gmail, accepted_at FROM gmail_rentals WHERE status = 'Accepted' AND is_active = 1 AND expired_24h_notified = 0")
     active_24h_tasks = cursor.fetchall()
 
@@ -573,7 +595,6 @@ async def background_timer_job(context: ContextTypes.DEFAULT_TYPE):
         if accepted_at:
             dt = datetime.strptime(accepted_at.split(".")[0], "%Y-%m-%d %H:%M:%S")
             if (now - dt).total_seconds() >= 86400: # 24 Hours
-                # Deactivate Task and mark notified
                 cursor.execute("UPDATE gmail_rentals SET is_active = 0, expired_24h_notified = 1 WHERE id = ?", (task_id,))
                 conn.commit()
 
@@ -588,7 +609,7 @@ async def background_timer_job(context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
 
-    # 3. Check IST Quiet Hours (12:00 AM to 9:00 AM IST for cookie reminders)
+    # 3. Check IST Quiet Hours (12:00 AM to 9:00 AM IST)
     ist_tz = pytz.timezone('Asia/Kolkata')
     ist_now = datetime.now(ist_tz)
     current_hour = ist_now.hour
@@ -632,7 +653,128 @@ async def background_timer_job(context: ContextTypes.DEFAULT_TYPE):
 
     conn.close()
 
-# 11. ADMIN COMMANDS (ACTIVATE, DEACTIVATE, TASK BALANCES)
+# 11. ADMIN COMMANDS (BROADCAST, BALANCE, TASK BALANCE, ACTIVATION, MSG)
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    msg = " ".join(context.args)
+    if not msg:
+        await update.message.reply_text("⚠️ Usage: `/broadcast Your message here`", parse_mode="Markdown")
+        return
+
+    conn = sqlite3.connect("rental_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT user_id FROM users UNION SELECT DISTINCT user_id FROM gmail_rentals")
+    users = cursor.fetchall()
+    conn.close()
+
+    sent, failed = 0, 0
+    for u in users:
+        try:
+            await context.bot.send_message(chat_id=u[0], text=msg, parse_mode="Markdown")
+            sent += 1
+        except Exception:
+            failed += 1
+
+    await update.message.reply_text(f"📢 **Broadcast Completed!**\n\n✅ Sent to: {sent} users\n🔴 Failed: {failed} users")
+
+async def add_main_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    try:
+        target_id = int(context.args[0])
+        amount = float(context.args[1])
+        ensure_user_exists(target_id)
+
+        conn = sqlite3.connect("rental_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, target_id))
+        conn.commit()
+        conn.close()
+
+        await update.message.reply_text(f"✅ Added ₹{amount} main balance to user `{target_id}`.", parse_mode="Markdown")
+        await context.bot.send_message(chat_id=target_id, text=f"💰 **Balance Update:** Admin added ₹{amount} to your main balance!")
+    except Exception:
+        await update.message.reply_text("⚠️ Usage: `/addbalance <user_id> <amount>`")
+
+async def remove_main_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    try:
+        target_id = int(context.args[0])
+        amount = float(context.args[1])
+        ensure_user_exists(target_id)
+
+        conn = sqlite3.connect("rental_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET balance = MAX(0, balance - ?) WHERE user_id = ?", (amount, target_id))
+        conn.commit()
+        conn.close()
+
+        await update.message.reply_text(f"🔴 Deducted ₹{amount} from user `{target_id}`.", parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text("⚠️ Usage: `/removebalance <user_id> <amount>`")
+
+async def add_task_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    try:
+        task_id = int(context.args[0])
+        amount = float(context.args[1])
+
+        conn = sqlite3.connect("rental_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (task_id,))
+        row = cursor.fetchone()
+
+        if not row:
+            await update.message.reply_text("❌ Task ID not found!")
+            conn.close()
+            return
+
+        u_id, gmail = row
+        ensure_user_exists(u_id)
+
+        cursor.execute("UPDATE gmail_rentals SET total_earned = total_earned + ? WHERE id = ?", (amount, task_id))
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, u_id))
+        conn.commit()
+        conn.close()
+
+        await update.message.reply_text(f"✅ Added ₹{amount} to Task #{task_id} (`{gmail}`). User `{u_id}` main balance updated.", parse_mode="Markdown")
+        await context.bot.send_message(chat_id=u_id, text=f"💰 **Task Balance Added:** ₹{amount} added for Gmail `{gmail}`!")
+    except Exception:
+        await update.message.reply_text("⚠️ Usage: `/addtaskbal <task_id> <amount>`")
+
+async def remove_task_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    try:
+        task_id = int(context.args[0])
+        amount = float(context.args[1])
+
+        conn = sqlite3.connect("rental_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (task_id,))
+        row = cursor.fetchone()
+
+        if not row:
+            await update.message.reply_text("❌ Task ID not found!")
+            conn.close()
+            return
+
+        u_id, gmail = row
+        ensure_user_exists(u_id)
+
+        cursor.execute("UPDATE gmail_rentals SET total_earned = MAX(0, total_earned - ?) WHERE id = ?", (amount, task_id))
+        cursor.execute("UPDATE users SET balance = MAX(0, balance - ?) WHERE user_id = ?", (amount, u_id))
+        conn.commit()
+        conn.close()
+
+        await update.message.reply_text(f"🔴 Deducted ₹{amount} from Task #{task_id} (`{gmail}`).", parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text("⚠️ Usage: `/removetaskbal <task_id> <amount>`")
+
 async def activate_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -694,61 +836,6 @@ async def deactivate_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         await update.message.reply_text("⚠️ Usage: `/deactivatetask <task_id>`")
 
-async def add_task_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    try:
-        task_id = int(context.args[0])
-        amount = float(context.args[1])
-
-        conn = sqlite3.connect("rental_bot.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (task_id,))
-        row = cursor.fetchone()
-
-        if not row:
-            await update.message.reply_text("❌ Task ID not found!")
-            conn.close()
-            return
-
-        u_id, gmail = row
-        cursor.execute("UPDATE gmail_rentals SET total_earned = total_earned + ? WHERE id = ?", (amount, task_id))
-        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, u_id))
-        conn.commit()
-        conn.close()
-
-        await update.message.reply_text(f"✅ Added ₹{amount} to Task #{task_id} (`{gmail}`). User `{u_id}` updated.", parse_mode="Markdown")
-        await context.bot.send_message(chat_id=u_id, text=f"💰 **Task Balance Added:** ₹{amount} added for Gmail `{gmail}`!")
-    except Exception:
-        await update.message.reply_text("⚠️ Usage: `/addtaskbal <task_id> <amount>`")
-
-async def remove_task_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    try:
-        task_id = int(context.args[0])
-        amount = float(context.args[1])
-
-        conn = sqlite3.connect("rental_bot.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (task_id,))
-        row = cursor.fetchone()
-
-        if not row:
-            await update.message.reply_text("❌ Task ID not found!")
-            conn.close()
-            return
-
-        u_id, gmail = row
-        cursor.execute("UPDATE gmail_rentals SET total_earned = MAX(0, total_earned - ?) WHERE id = ?", (amount, task_id))
-        cursor.execute("UPDATE users SET balance = MAX(0, balance - ?) WHERE user_id = ?", (amount, u_id))
-        conn.commit()
-        conn.close()
-
-        await update.message.reply_text(f"🔴 Deducted ₹{amount} from Task #{task_id} (`{gmail}`).", parse_mode="Markdown")
-    except Exception:
-        await update.message.reply_text("⚠️ Usage: `/removetaskbal <task_id> <amount>`")
-
 async def direct_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -762,6 +849,8 @@ async def direct_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    ensure_user_exists(user_id)
+
     if not await check_channel_joined(user_id, context):
         await send_join_prompt(user_id, context)
         return
@@ -831,17 +920,18 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.Regex('.*Balance.*'), show_balance))
 
     # Admin Handlers
-    app.add_handler(CommandHandler("activatetask", activate_task))
-    app.add_handler(CommandHandler("deactivatetask", deactivate_task))
+    app.add_handler(CommandHandler("broadcast", broadcast))
+    app.add_handler(CommandHandler("addbalance", add_main_balance))
+    app.add_handler(CommandHandler("removebalance", remove_main_balance))
     app.add_handler(CommandHandler("addtaskbal", add_task_balance))
     app.add_handler(CommandHandler("removetaskbal", remove_task_balance))
+    app.add_handler(CommandHandler("activatetask", activate_task))
+    app.add_handler(CommandHandler("deactivatetask", deactivate_task))
     app.add_handler(CommandHandler("msg", direct_message))
 
     # Safe Job Queue Registration
     if app.job_queue:
         app.job_queue.run_repeating(background_timer_job, interval=60, first=10)
 
-    print("Rental Bot starting with 24h Expiration System...")
+    print("Rental Bot starting with Broadcast registered...")
     app.run_polling()
-                        
-    
