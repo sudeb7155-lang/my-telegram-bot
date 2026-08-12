@@ -17,7 +17,7 @@ from telegram.ext import (
 
 # ================= CONFIGURATION =================
 BOT_TOKEN = "8995026167:AAH0lS5E05eQtm7s4vgYZPhy72Uv6cSdtl8"      # Paste your BotFather Token here
-ADMIN_ID =      6112720850             # Paste your numerical Telegram User ID here
+ADMIN_ID =   6112720850                # Your numerical Telegram User ID
 
 # TUTORIAL VIDEO LINKS
 EARN_TUTORIAL_URL = "https://t.me/googlejobhubsudeb/3415"    # Video 1: "How to Earn"
@@ -63,7 +63,8 @@ def init_db():
             accepted_at TIMESTAMP,
             bonus_3h_given INTEGER DEFAULT 0,
             last_nudge_at TIMESTAMP,
-            total_earned REAL DEFAULT 0.0
+            total_earned REAL DEFAULT 0.0,
+            expired_24h_notified INTEGER DEFAULT 0
         )
     ''')
     cursor.execute('''
@@ -118,7 +119,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
     if not await check_channel_joined(user_id, context):
-        await send_join_prompt(update, context)
+        await send_join_prompt(user_id, context)
         return
 
     await send_welcome_menu(update, context)
@@ -529,7 +530,7 @@ async def handle_submit_later(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer("Reminder muted temporarily. We will remind you later!", show_alert=True)
 
-# 10. BACKGROUND JOBS (3H ALERT & 30MIN ENDLESS REMINDERS WITH IST QUIET TIME)
+# 10. BACKGROUND JOBS (3H ALERT, 24H EXPIRATION & 30MIN REMINDERS)
 async def background_timer_job(context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect("rental_bot.db")
     cursor = conn.cursor()
@@ -563,7 +564,31 @@ async def background_timer_job(context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
 
-    # 2. Check IST Quiet Hours (12:00 AM to 9:00 AM IST)
+    # 2. Check 24-Hour Expiration (Auto-deactivate & send offboarding prompt)
+    cursor.execute("SELECT id, user_id, gmail, accepted_at FROM gmail_rentals WHERE status = 'Accepted' AND is_active = 1 AND expired_24h_notified = 0")
+    active_24h_tasks = cursor.fetchall()
+
+    for task in active_24h_tasks:
+        task_id, u_id, gmail, accepted_at = task
+        if accepted_at:
+            dt = datetime.strptime(accepted_at.split(".")[0], "%Y-%m-%d %H:%M:%S")
+            if (now - dt).total_seconds() >= 86400: # 24 Hours
+                # Deactivate Task and mark notified
+                cursor.execute("UPDATE gmail_rentals SET is_active = 0, expired_24h_notified = 1 WHERE id = ?", (task_id,))
+                conn.commit()
+
+                offboard_msg = (
+                    f"🎁 **Your sell bonus has been added! All main bonuses added.**\n\n"
+                    f"📧 **Gmail Task:** `{gmail}`\n\n"
+                    f"Please submit again ID & Pass for a new task!\n\n"
+                    f"💡 *You can disconnect your Gmail and sell on another platform, OR continue using our service—the bot pays you cents every day!*"
+                )
+                try:
+                    await context.bot.send_message(chat_id=u_id, text=offboard_msg, parse_mode="Markdown")
+                except Exception:
+                    pass
+
+    # 3. Check IST Quiet Hours (12:00 AM to 9:00 AM IST for cookie reminders)
     ist_tz = pytz.timezone('Asia/Kolkata')
     ist_now = datetime.now(ist_tz)
     current_hour = ist_now.hour
@@ -572,8 +597,8 @@ async def background_timer_job(context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         return
 
-    # 3. Endless 30-Min Nudges for Pending Cookie Updates
-    cursor.execute("SELECT id, user_id, gmail, last_nudge_at FROM gmail_rentals WHERE bonus_3h_given = 1 AND is_active = 0 AND status = 'Accepted'")
+    # 4. Endless 30-Min Nudges for Pending Cookie Updates
+    cursor.execute("SELECT id, user_id, gmail, last_nudge_at FROM gmail_rentals WHERE bonus_3h_given = 1 AND is_active = 0 AND status = 'Accepted' AND expired_24h_notified = 0")
     pending_updates = cursor.fetchall()
 
     for task in pending_updates:
@@ -607,7 +632,68 @@ async def background_timer_job(context: ContextTypes.DEFAULT_TYPE):
 
     conn.close()
 
-# 11. PER-TASK BALANCE ADMIN COMMANDS
+# 11. ADMIN COMMANDS (ACTIVATE, DEACTIVATE, TASK BALANCES)
+async def activate_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    try:
+        task_id = int(context.args[0])
+
+        conn = sqlite3.connect("rental_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (task_id,))
+        row = cursor.fetchone()
+
+        if not row:
+            await update.message.reply_text("❌ Task ID not found!")
+            conn.close()
+            return
+
+        u_id, gmail = row
+        now = datetime.now()
+        cursor.execute("UPDATE gmail_rentals SET is_active = 1, status = 'Accepted', accepted_at = ? WHERE id = ?", (now, task_id))
+        conn.commit()
+        conn.close()
+
+        await update.message.reply_text(f"🟢 Task #{task_id} (`{gmail}`) activated successfully.", parse_mode="Markdown")
+        await context.bot.send_message(
+            chat_id=u_id, 
+            text=f"🟢 **Task Activated:** Your Gmail task #{task_id} (`{gmail}`) is now **Active (Online)**!",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        await update.message.reply_text("⚠️ Usage: `/activatetask <task_id>`")
+
+async def deactivate_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    try:
+        task_id = int(context.args[0])
+
+        conn = sqlite3.connect("rental_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (task_id,))
+        row = cursor.fetchone()
+
+        if not row:
+            await update.message.reply_text("❌ Task ID not found!")
+            conn.close()
+            return
+
+        u_id, gmail = row
+        cursor.execute("UPDATE gmail_rentals SET is_active = 0 WHERE id = ?", (task_id,))
+        conn.commit()
+        conn.close()
+
+        await update.message.reply_text(f"🔴 Task #{task_id} (`{gmail}`) deactivated successfully.", parse_mode="Markdown")
+        await context.bot.send_message(
+            chat_id=u_id, 
+            text=f"🔴 **Task Deactivated:** Your Gmail task #{task_id} (`{gmail}`) has been set to offline by admin.",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        await update.message.reply_text("⚠️ Usage: `/deactivatetask <task_id>`")
+
 async def add_task_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -745,6 +831,8 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.Regex('.*Balance.*'), show_balance))
 
     # Admin Handlers
+    app.add_handler(CommandHandler("activatetask", activate_task))
+    app.add_handler(CommandHandler("deactivatetask", deactivate_task))
     app.add_handler(CommandHandler("addtaskbal", add_task_balance))
     app.add_handler(CommandHandler("removetaskbal", remove_task_balance))
     app.add_handler(CommandHandler("msg", direct_message))
@@ -753,7 +841,7 @@ if __name__ == '__main__':
     if app.job_queue:
         app.job_queue.run_repeating(background_timer_job, interval=60, first=10)
 
-    print("Rental Bot starting with Per-Task tracking...")
+    print("Rental Bot starting with 24h Expiration System...")
     app.run_polling()
-
-            
+                        
+    
