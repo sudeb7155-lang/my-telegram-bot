@@ -15,12 +15,12 @@ from telegram.ext import (
 )
 
 # ================= CONFIGURATION =================
-BOT_TOKEN = "8995026167:AAH0lS5E05eQtm7s4vgYZPhy72Uv6cSdtl8"  # Paste your token from BotFather here
-ADMIN_ID =    6112720850           # Paste your numerical Telegram User ID here
+BOT_TOKEN = "8995026167:AAH0lS5E05eQtm7s4vgYZPhy72Uv6cSdtl8"  # Paste your token from BotFather
+ADMIN_ID =      6112720850         # Paste your numerical Telegram User ID
 TUTORIAL_VIDEO_URL = "https://t.me/googlejobhubsudeb/3415" # Your video link
 # =================================================
 
-# 1. FLASK KEEP-ALIVE SERVER FOR RENDER
+# 1. FLASK KEEP-ALIVE SERVER
 web_app = Flask(__name__)
 
 @web_app.route('/')
@@ -201,7 +201,7 @@ async def handle_admin_decision(update: Update, context: ContextTypes.DEFAULT_TY
 
     conn.close()
 
-# 6. ACCOUNT EARNING HISTORY
+# 6. ACCOUNT EARNING HISTORY (FIXED & EXPANDED)
 async def earning_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     conn = sqlite3.connect("rental_bot.db")
@@ -218,33 +218,60 @@ async def earning_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for row in records:
         gmail, status, earned, accepted_at, stage = row
-        history_text += f"📧 **Gmail:** `{gmail}`\n"
-        history_text += f"📌 **Status:** `{status}`\n"
-        history_text += f"💵 **Total Earned:** ₹{earned:.2f}\n"
-
-        if status == "Accepted" and accepted_at:
-            accepted_dt = datetime.strptime(accepted_at.split(".")[0], "%Y-%m-%d %H:%M:%S")
-            now = datetime.now()
+        
+        history_text += f"📦 **GMAIL BOX:** `{gmail}`\n"
+        
+        if status == "Pending":
+            history_text += "📌 **Status:** ⏳ `Pending Review` (Admin checking)\n"
+            history_text += "💵 **Earned:** ₹0.00\n"
             
-            if stage == "None":
-                next_payout = accepted_dt + timedelta(hours=1)
-                stage_label = "1h Bonus"
-            elif stage == "1h":
-                next_payout = accepted_dt + timedelta(hours=6)
-                stage_label = "6h Payout"
-            else:
-                next_payout = accepted_dt + timedelta(hours=12)
-                stage_label = "12h Payout"
+        elif status == "Rejected":
+            history_text += "📌 **Status:** ❌ `Rejected`\n"
+            history_text += "💵 **Earned:** ₹0.00\n"
+            
+        elif status == "Accepted":
+            history_text += "📌 **Status:** ✅ `Accepted & Active`\n"
+            history_text += f"💵 **Earned from this Mail:** ₹{earned:.2f}\n"
 
-            remaining = next_payout - now
-            if remaining.total_seconds() > 0:
-                hours, remainder = divmod(int(remaining.total_seconds()), 3600)
-                minutes, _ = divmod(remainder, 60)
-                history_text += f"⏳ **Next {stage_label} In:** {hours}h {minutes}m\n"
-            else:
-                history_text += f"⚡ **Next {stage_label}:** Processing soon...\n"
+            if accepted_at:
+                try:
+                    accepted_dt = datetime.strptime(accepted_at.split(".")[0], "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    accepted_dt = datetime.now()
+                    
+                now = datetime.now()
 
-        history_text += "-------------------------\n"
+                # Block 1: 1h Stage
+                if stage == "None":
+                    target_time = accepted_dt + timedelta(hours=1)
+                    rem = target_time - now
+                    if rem.total_seconds() > 0:
+                        h, m = divmod(int(rem.total_seconds() // 60), 60)
+                        history_text += f"⏱ **1st Block (1h Bonus):** In {h}h {m}m\n"
+                    else:
+                        history_text += "⏱ **1st Block (1h Bonus):** Ready for Payout! 💰\n"
+
+                # Block 2: 6h Stage
+                elif stage == "1h":
+                    target_time = accepted_dt + timedelta(hours=6)
+                    rem = target_time - now
+                    if rem.total_seconds() > 0:
+                        h, m = divmod(int(rem.total_seconds() // 60), 60)
+                        history_text += f"⏱ **2nd Block (6h Payout):** In {h}h {m}m\n"
+                    else:
+                        history_text += "⏱ **2nd Block (6h Payout):** Pending Cookie Update 🔔\n"
+
+                # Block 3: 12h Stage
+                else:
+                    target_time = accepted_dt + timedelta(hours=12)
+                    rem = target_time - now
+                    if rem.total_seconds() > 0:
+                        h, m = divmod(int(rem.total_seconds() // 60), 60)
+                        history_text += f"⏱ **3rd Block (12h Recurring):** In {h}h {m}m\n"
+                    else:
+                        history_text += "⏱ **3rd Block (12h Recurring):** Processing balance... ⚡\n"
+
+        history_text += "----------------_________\n"
 
     await update.message.reply_text(history_text, parse_mode="Markdown")
 
@@ -277,7 +304,7 @@ async def show_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("✅ Withdrawal request submitted to admin!")
 
-# 8. ADMIN COMMANDS (AUTHORITY CONTROLS)
+# 8. ADMIN COMMANDS
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -369,7 +396,7 @@ if __name__ == '__main__':
     app = Application.builder().token(BOT_TOKEN).build()
 
     rent_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^📧 Rent Mail$'), start_rent)],
+        entry_points=[MessageHandler(filters.Regex('^(📧 Rent Mail|Rent Mail)$'), start_rent)],
         states={
             GMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_gmail)],
             PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_password)],
@@ -381,10 +408,12 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("start", start))
     app.add_handler(rent_conv)
     app.add_handler(CallbackQueryHandler(handle_admin_decision, pattern="^(accept|reject)_"))
-    app.add_handler(MessageHandler(filters.Regex('^📊 Account Earning History$'), earning_history))
-    app.add_handler(MessageHandler(filters.Regex('^💰 Balance$'), show_balance))
-    app.add_handler(MessageHandler(filters.Regex('^💬 Support$'), show_support))
-    app.add_handler(MessageHandler(filters.Regex('^💳 Withdrawal$'), show_withdrawal))
+    
+    # Flexible Regex Filter to catch Account Earning History button regardless of emoji variation
+    app.add_handler(MessageHandler(filters.Regex('.*Account Earning History.*'), earning_history))
+    app.add_handler(MessageHandler(filters.Regex('.*Balance.*'), show_balance))
+    app.add_handler(MessageHandler(filters.Regex('.*Support.*'), show_support))
+    app.add_handler(MessageHandler(filters.Regex('.*Withdrawal.*'), show_withdrawal))
 
     # Admin Handlers
     app.add_handler(CommandHandler("broadcast", broadcast))
@@ -394,4 +423,3 @@ if __name__ == '__main__':
 
     print("Rental Bot starting...")
     app.run_polling()
-
