@@ -16,14 +16,14 @@ from telegram.ext import (
 )
 
 # ================= CONFIGURATION =================
-BOT_TOKEN = "8995026167:AAH0lS5E05eQtm7s4vgYZPhy72Uv6cSdtl8"      # Bot Token from BotFather
-ADMIN_ID =       6112720850            # Your Telegram User ID
-
+BOT_TOKEN = "8995026167:AAH0lS5E05eQtm7s4vgYZPhy72Uv6cSdtl8"      # Paste your BotFather Token here
+ADMIN_ID =                   # Paste your numerical Telegram User ID here
+6112720850
 # TUTORIAL VIDEO LINKS
 EARN_TUTORIAL_URL = "https://t.me/googlejobhubsudeb/3415"    # Video 1: "How to Earn"
 COOKIE_TUTORIAL_URL = "https://t.me/googlejobhubsudeb/3416"  # Video 2: "How to Update Cookies"
 
-CHANNEL_USERNAME = "@googlejobhubsudeb"
+CHANNEL_USERNAME = "@googlejobhubsudeb"  # e.g. @BongTakeAnime (include @)
 CHANNEL_LINK = "https://t.me/googlejobhubsudeb"
 # =================================================
 
@@ -35,7 +35,7 @@ def health_check():
     return "Rental Bot is Running 24/7!"
 
 def run_flask():
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 10000))
     web_app.run(host="0.0.0.0", port=port)
 
 threading.Thread(target=run_flask, daemon=True).start()
@@ -80,7 +80,7 @@ def init_db():
 
 init_db()
 
-# Helper: Channel Check
+# Helper: Channel Membership Check
 async def check_channel_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     try:
         member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
@@ -163,7 +163,7 @@ async def handle_check_joined(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         await query.message.reply_text("❌ You haven't joined the channel yet! Click **Verify** after joining.", parse_mode="Markdown")
 
-# 4. RENT MAIL SUBMISSION
+# 4. RENT MAIL FLOW
 async def start_rent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_channel_joined(update.effective_user.id, context):
         await send_join_prompt(update, context)
@@ -280,7 +280,7 @@ async def process_updated_cookies(update: Update, context: ContextTypes.DEFAULT_
 async def earning_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not await check_channel_joined(user_id, context):
-        await send_join_prompt(update, context)
+        await send_join_prompt(user_id, context)
         return
 
     conn = sqlite3.connect("rental_bot.db")
@@ -333,7 +333,7 @@ async def earning_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 7. PAYMENT ADDRESS & WITHDRAWAL
 async def start_set_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_channel_joined(update.effective_user.id, context):
-        await send_join_prompt(update, context)
+        await send_join_prompt(update.effective_user.id, context)
         return ConversationHandler.END
 
     await update.message.reply_text("⚙️ **Enter your UPI ID or USDT Wallet Address:**", parse_mode="Markdown")
@@ -415,7 +415,7 @@ async def process_withdrawal_amount(update: Update, context: ContextTypes.DEFAUL
 # 8. SUPPORT SYSTEM
 async def start_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_channel_joined(update.effective_user.id, context):
-        await send_join_prompt(update, context)
+        await send_join_prompt(update.effective_user.id, context)
         return ConversationHandler.END
 
     await update.message.reply_text("💬 **Type your support message below:**")
@@ -749,9 +749,11 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("removetaskbal", remove_task_balance))
     app.add_handler(CommandHandler("msg", direct_message))
 
-    # Register Background Timer (runs every 60 seconds)
-    job_queue = app.job_queue
-    job_queue.run_repeating(background_timer_job, interval=60, first=10)
+    # Safe Job Queue Registration
+    if app.job_queue:
+        app.job_queue.run_repeating(background_timer_job, interval=60, first=10)
 
     print("Rental Bot starting with Per-Task tracking...")
     app.run_polling()
+
+            
