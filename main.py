@@ -1,3 +1,19 @@
+import os
+import threading
+from flask import Flask
+
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def health_check():
+    return "Bot is live on Render!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    web_app.run(host="0.0.0.0", port=port)
+
+# Start dummy web server for Render
+threading.Thread(target=run_flask, daemon=True).start()
 import sqlite3
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
