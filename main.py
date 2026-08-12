@@ -16,7 +16,7 @@ from telegram.ext import (
 )
 
 # ================= CONFIGURATION =================
-BOT_TOKEN = "8995026167:AAH0lS5E05eQtm7s4vgYZPhy72Uv6cSdtl8"      # Paste your BotFather Token here
+BOT_TOKEN = "8995026167:AAFvv4lugLm5ZWHcf4KGZrnY7PKJnVHcrEM"      # Paste your BotFather Token here
 ADMIN_ID =       6112720850            # Your numerical Telegram User ID
 
 # TUTORIAL VIDEO LINKS
