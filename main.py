@@ -17,8 +17,8 @@ from telegram.ext import (
 
 # ================= CONFIGURATION =================
 BOT_TOKEN = "8995026167:AAH0lS5E05eQtm7s4vgYZPhy72Uv6cSdtl8"      # Paste your BotFather Token here
-ADMIN_ID =                   # Paste your numerical Telegram User ID here
-6112720850
+ADMIN_ID =      6112720850             # Paste your numerical Telegram User ID here
+
 # TUTORIAL VIDEO LINKS
 EARN_TUTORIAL_URL = "https://t.me/googlejobhubsudeb/3415"    # Video 1: "How to Earn"
 COOKIE_TUTORIAL_URL = "https://t.me/googlejobhubsudeb/3416"  # Video 2: "How to Update Cookies"
