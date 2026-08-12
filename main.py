@@ -17,7 +17,7 @@ from telegram.ext import (
 
 # ================= CONFIGURATION =================
 BOT_TOKEN = "8995026167:AAFvv4lugLm5ZWHcf4KGZrnY7PKJnVHcrEM"      # Paste your BotFather Token here
-ADMIN_ID =       6112720850            # Your numerical Telegram User ID
+ADMIN_ID = 6112720850                  # Your numerical Telegram User ID
 
 # TUTORIAL VIDEO LINKS
 EARN_TUTORIAL_URL = "https://t.me/googlejobhubsudeb/3415"    # Video 1: "How to Earn"
@@ -32,11 +32,12 @@ web_app = Flask(__name__)
 
 @web_app.route('/')
 def health_check():
-    return "Rental Bot is Running 24/7!"
+    return "Rental Bot is Running 24/7!", 200
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
-    web_app.run(host="0.0.0.0", port=port)
+    # Werkzeug server configured silently to prevent output interference
+    web_app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 threading.Thread(target=run_flask, daemon=True).start()
 
@@ -60,9 +61,9 @@ def init_db():
             cookies TEXT,
             status TEXT DEFAULT 'Pending',
             is_active INTEGER DEFAULT 0,
-            accepted_at TIMESTAMP,
+            accepted_at TEXT,
             bonus_3h_given INTEGER DEFAULT 0,
-            last_nudge_at TIMESTAMP,
+            last_nudge_at TEXT,
             total_earned REAL DEFAULT 0.0,
             expired_24h_notified INTEGER DEFAULT 0
         )
@@ -83,11 +84,26 @@ init_db()
 
 # Helper: Ensure User Exists in DB
 def ensure_user_exists(user_id: int):
-    conn = sqlite3.connect("rental_bot.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect("rental_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"User DB Check Error: {e}")
+
+# Helper: Safe Date Parser
+def parse_db_date(date_val):
+    if not date_val:
+        return None
+    date_str = str(date_val).split(".")[0]
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            pass
+    return None
 
 # Helper: Channel Membership Check
 async def check_channel_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -324,19 +340,19 @@ async def earning_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         history_text += f"💵 **Task Earnings:** ₹{earned:.2f}\n"
 
         if status == "Accepted" and accepted_at:
-            accepted_dt = datetime.strptime(accepted_at.split(".")[0], "%Y-%m-%d %H:%M:%S")
-            now = datetime.now()
-            
-            if bonus_given == 0:
-                target_time = accepted_dt + timedelta(hours=3)
-                rem = target_time - now
-                if rem.total_seconds() > 0:
-                    h, m = divmod(int(rem.total_seconds() // 60), 60)
-                    history_text += f"⏱ **3h Bonus Countdown:** In {h}h {m}m\n"
+            accepted_dt = parse_db_date(accepted_at)
+            if accepted_dt:
+                now = datetime.now()
+                if bonus_given == 0:
+                    target_time = accepted_dt + timedelta(hours=3)
+                    rem = target_time - now
+                    if rem.total_seconds() > 0:
+                        h, m = divmod(int(rem.total_seconds() // 60), 60)
+                        history_text += f"⏱ **3h Bonus Countdown:** In {h}h {m}m\n"
+                    else:
+                        history_text += "⏱ **3h Bonus:** Processing Admin Award... 💰\n"
                 else:
-                    history_text += "⏱ **3h Bonus:** Processing Admin Award... 💰\n"
-            else:
-                history_text += "🎁 **3h First Bonus:** Credited ✅\n"
+                    history_text += "🎁 **3h First Bonus:** Credited ✅\n"
 
         history_text += "----------------_________\n"
 
@@ -468,192 +484,204 @@ async def handle_admin_decision(update: Update, context: ContextTypes.DEFAULT_TY
     conn = sqlite3.connect("rental_bot.db")
     cursor = conn.cursor()
 
-    if action == "accept":
-        now = datetime.now()
-        cursor.execute("UPDATE gmail_rentals SET status = 'Accepted', is_active = 1, accepted_at = ? WHERE id = ?", (now, record_id))
-        cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (record_id,))
-        u_id, gmail = cursor.fetchone()
-        ensure_user_exists(u_id)
-        conn.commit()
+    try:
+        if action == "accept":
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute("UPDATE gmail_rentals SET status = 'Accepted', is_active = 1, accepted_at = ? WHERE id = ?", (now_str, record_id))
+            cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (record_id,))
+            row = cursor.fetchone()
+            if row:
+                u_id, gmail = row
+                ensure_user_exists(u_id)
+                conn.commit()
+                await context.bot.send_message(chat_id=u_id, text=f"🎉 **Gmail Accepted!** (`{gmail}`). Task is now **🟢 Active**! 3h bonus timer started.", parse_mode="Markdown")
+                await query.edit_message_text(f"✅ Approved Task #{record_id} (`{gmail}`).")
 
-        await context.bot.send_message(chat_id=u_id, text=f"🎉 **Gmail Accepted!** (`{gmail}`). Task is now **🟢 Active**! 3h bonus timer started.", parse_mode="Markdown")
-        await query.edit_message_text(f"✅ Approved Task #{record_id} (`{gmail}`).")
+        elif action == "reject":
+            cursor.execute("UPDATE gmail_rentals SET status = 'Rejected', is_active = 0 WHERE id = ?", (record_id,))
+            cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (record_id,))
+            row = cursor.fetchone()
+            if row:
+                u_id, gmail = row
+                conn.commit()
+                await context.bot.send_message(chat_id=u_id, text=f"❌ **Gmail Rejected:** (`{gmail}`).", parse_mode="Markdown")
+                await query.edit_message_text(f"❌ Rejected Task #{record_id}.")
 
-    elif action == "reject":
-        cursor.execute("UPDATE gmail_rentals SET status = 'Rejected', is_active = 0 WHERE id = ?", (record_id,))
-        cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (record_id,))
-        u_id, gmail = cursor.fetchone()
-        conn.commit()
+        elif action == "award3h":
+            amount = float(data[2])
+            cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (record_id,))
+            row = cursor.fetchone()
+            if row:
+                u_id, gmail = row
+                ensure_user_exists(u_id)
+                cursor.execute("UPDATE gmail_rentals SET total_earned = total_earned + ?, bonus_3h_given = 1, is_active = 0 WHERE id = ?", (amount, record_id))
+                cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, u_id))
+                conn.commit()
 
-        await context.bot.send_message(chat_id=u_id, text=f"❌ **Gmail Rejected:** (`{gmail}`).", parse_mode="Markdown")
-        await query.edit_message_text(f"❌ Rejected Task #{record_id}.")
+                msg = (
+                    f"🎁 **3-Hour Bonus Credited!**\n\n"
+                    f"Gmail: `{gmail}`\n"
+                    f"Bonus Added: ₹{amount:.2f}\n\n"
+                    f"⚠️ **Action Required for Next Bonus:**\n"
+                    f"Please submit new cookies using the new method to reactivate your Gmail task!"
+                )
+                buttons = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Update Now", callback_data=f"updcookie_{record_id}")],
+                    [InlineKeyboardButton("▶️ How to Update (Method Video)", url=COOKIE_TUTORIAL_URL)],
+                    [InlineKeyboardButton("⏳ Submit Later", callback_data="submit_later")]
+                ])
 
-    elif action == "award3h":
-        amount = float(data[2])
-        cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (record_id,))
-        u_id, gmail = cursor.fetchone()
-        ensure_user_exists(u_id)
-        
-        cursor.execute("UPDATE gmail_rentals SET total_earned = total_earned + ?, bonus_3h_given = 1, is_active = 0 WHERE id = ?", (amount, record_id))
-        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, u_id))
-        conn.commit()
+                await context.bot.send_message(chat_id=u_id, text=msg, reply_markup=buttons, parse_mode="Markdown")
+                await query.edit_message_text(f"✅ Awarded ₹{amount} bonus for Task #{record_id}.")
 
-        msg = (
-            f"🎁 **3-Hour Bonus Credited!**\n\n"
-            f"Gmail: `{gmail}`\n"
-            f"Bonus Added: ₹{amount:.2f}\n\n"
-            f"⚠️ **Action Required for Next Bonus:**\n"
-            f"Please submit new cookies using the new method to reactivate your Gmail task!"
-        )
-        buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Update Now", callback_data=f"updcookie_{record_id}")],
-            [InlineKeyboardButton("▶️ How to Update (Method Video)", url=COOKIE_TUTORIAL_URL)],
-            [InlineKeyboardButton("⏳ Submit Later", callback_data="submit_later")]
-        ])
+        elif action == "accupdate":
+            new_cookies = context.bot_data.get(f"temp_cookies_{record_id}", "")
+            cursor.execute("UPDATE gmail_rentals SET cookies = ?, is_active = 1, status = 'Accepted' WHERE id = ?", (new_cookies, record_id))
+            cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (record_id,))
+            row = cursor.fetchone()
+            if row:
+                u_id, gmail = row
+                conn.commit()
+                await context.bot.send_message(chat_id=u_id, text=f"🎉 **Cookies Accepted!** Task `{gmail}` is now **🟢 Active (Online)**!", parse_mode="Markdown")
+                await query.edit_message_text(f"✅ Accepted updated cookies for Task #{record_id}.")
 
-        await context.bot.send_message(chat_id=u_id, text=msg, reply_markup=buttons, parse_mode="Markdown")
-        await query.edit_message_text(f"✅ Awarded ₹{amount} bonus for Task #{record_id}.")
+        elif action == "rejupdate":
+            cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (record_id,))
+            row = cursor.fetchone()
+            if row:
+                u_id, gmail = row
+                conn.commit()
+                await context.bot.send_message(chat_id=u_id, text=f"❌ **Updated Cookies Rejected** for `{gmail}`. Please re-submit valid cookies.", parse_mode="Markdown")
+                await query.edit_message_text(f"❌ Rejected updated cookies for Task #{record_id}.")
 
-    elif action == "accupdate":
-        new_cookies = context.bot_data.get(f"temp_cookies_{record_id}", "")
-        cursor.execute("UPDATE gmail_rentals SET cookies = ?, is_active = 1, status = 'Accepted' WHERE id = ?", (new_cookies, record_id))
-        cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (record_id,))
-        u_id, gmail = cursor.fetchone()
-        conn.commit()
+        elif action == "wdaccept":
+            cursor.execute("SELECT user_id, amount, address FROM withdrawals WHERE id = ?", (record_id,))
+            row = cursor.fetchone()
+            if row:
+                u_id, amount, addr = row
+                cursor.execute("UPDATE users SET balance = MAX(0, balance - ?) WHERE user_id = ?", (amount, u_id))
+                cursor.execute("UPDATE withdrawals SET status = 'Approved' WHERE id = ?", (record_id,))
+                conn.commit()
+                await context.bot.send_message(chat_id=u_id, text=f"🎉 **WITHDRAWAL SUCCESSFUL!**\nAmount: ₹{amount:.2f}\nUPI: `{addr}`\nCredited!", parse_mode="Markdown")
+                await query.edit_message_text(f"✅ Paid ₹{amount} to `{u_id}`.")
 
-        await context.bot.send_message(chat_id=u_id, text=f"🎉 **Cookies Accepted!** Task `{gmail}` is now **🟢 Active (Online)**!", parse_mode="Markdown")
-        await query.edit_message_text(f"✅ Accepted updated cookies for Task #{record_id}.")
+        elif action == "wdreject":
+            cursor.execute("UPDATE withdrawals SET status = 'Rejected' WHERE id = ?", (record_id,))
+            conn.commit()
+            await query.edit_message_text(f"❌ Rejected withdrawal #{record_id}.")
 
-    elif action == "rejupdate":
-        cursor.execute("SELECT user_id, gmail FROM gmail_rentals WHERE id = ?", (record_id,))
-        u_id, gmail = cursor.fetchone()
-
-        await context.bot.send_message(chat_id=u_id, text=f"❌ **Updated Cookies Rejected** for `{gmail}`. Please re-submit valid cookies.", parse_mode="Markdown")
-        await query.edit_message_text(f"❌ Rejected updated cookies for Task #{record_id}.")
-
-    elif action == "wdaccept":
-        cursor.execute("SELECT user_id, amount, address FROM withdrawals WHERE id = ?", (record_id,))
-        u_id, amount, addr = cursor.fetchone()
-        cursor.execute("UPDATE users SET balance = MAX(0, balance - ?) WHERE user_id = ?", (amount, u_id))
-        cursor.execute("UPDATE withdrawals SET status = 'Approved' WHERE id = ?", (record_id,))
-        conn.commit()
-
-        await context.bot.send_message(chat_id=u_id, text=f"🎉 **WITHDRAWAL SUCCESSFUL!**\nAmount: ₹{amount:.2f}\nUPI: `{addr}`\nCredited!", parse_mode="Markdown")
-        await query.edit_message_text(f"✅ Paid ₹{amount} to `{u_id}`.")
-
-    elif action == "wdreject":
-        cursor.execute("UPDATE withdrawals SET status = 'Rejected' WHERE id = ?", (record_id,))
-        conn.commit()
-        await query.edit_message_text(f"❌ Rejected withdrawal #{record_id}.")
-
-    conn.close()
+    except Exception as e:
+        print(f"Error in handle_admin_decision: {e}")
+    finally:
+        conn.close()
 
 async def handle_submit_later(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer("Reminder muted temporarily. We will remind you later!", show_alert=True)
 
-# 10. BACKGROUND JOBS (3H ALERT, 24H EXPIRATION & 30MIN REMINDERS)
+# 10. BACKGROUND JOBS
 async def background_timer_job(context: ContextTypes.DEFAULT_TYPE):
-    conn = sqlite3.connect("rental_bot.db")
-    cursor = conn.cursor()
-    now = datetime.now()
+    try:
+        conn = sqlite3.connect("rental_bot.db")
+        cursor = conn.cursor()
+        now = datetime.now()
 
-    # 1. Check 3-Hour Timers
-    cursor.execute("SELECT id, user_id, gmail, accepted_at FROM gmail_rentals WHERE status = 'Accepted' AND bonus_3h_given = 0 AND is_active = 1")
-    accepted_tasks = cursor.fetchall()
+        # 1. Check 3-Hour Timers
+        cursor.execute("SELECT id, user_id, gmail, accepted_at FROM gmail_rentals WHERE status = 'Accepted' AND bonus_3h_given = 0 AND is_active = 1")
+        accepted_tasks = cursor.fetchall()
 
-    for task in accepted_tasks:
-        task_id, u_id, gmail, accepted_at = task
-        if accepted_at:
-            dt = datetime.strptime(accepted_at.split(".")[0], "%Y-%m-%d %H:%M:%S")
-            if (now - dt).total_seconds() >= 10800: # 3 Hours
-                admin_prompt = (
-                    f"⏰ **3-HOUR RENTAL BONUS DUE**\n\n"
-                    f"Task ID: `{task_id}`\n"
-                    f"User ID: `{u_id}`\n"
-                    f"Gmail: `{gmail}`\n\n"
-                    f"Select bonus amount to reward the user:"
-                )
-                buttons = InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("+₹10", callback_data=f"award3h_{task_id}_10"),
-                        InlineKeyboardButton("+₹20", callback_data=f"award3h_{task_id}_20"),
-                        InlineKeyboardButton("+₹30", callback_data=f"award3h_{task_id}_30")
-                    ]
-                ])
-                try:
-                    await context.bot.send_message(chat_id=ADMIN_ID, text=admin_prompt, reply_markup=buttons, parse_mode="Markdown")
-                except Exception:
-                    pass
+        for task in accepted_tasks:
+            task_id, u_id, gmail, accepted_at = task
+            accepted_dt = parse_db_date(accepted_at)
+            if accepted_dt:
+                if (now - accepted_dt).total_seconds() >= 10800: # 3 Hours
+                    admin_prompt = (
+                        f"⏰ **3-HOUR RENTAL BONUS DUE**\n\n"
+                        f"Task ID: `{task_id}`\n"
+                        f"User ID: `{u_id}`\n"
+                        f"Gmail: `{gmail}`\n\n"
+                        f"Select bonus amount to reward the user:"
+                    )
+                    buttons = InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton("+₹10", callback_data=f"award3h_{task_id}_10"),
+                            InlineKeyboardButton("+₹20", callback_data=f"award3h_{task_id}_20"),
+                            InlineKeyboardButton("+₹30", callback_data=f"award3h_{task_id}_30")
+                        ]
+                    ])
+                    try:
+                        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_prompt, reply_markup=buttons, parse_mode="Markdown")
+                    except Exception:
+                        pass
 
-    # 2. Check 24-Hour Expiration
-    cursor.execute("SELECT id, user_id, gmail, accepted_at FROM gmail_rentals WHERE status = 'Accepted' AND is_active = 1 AND expired_24h_notified = 0")
-    active_24h_tasks = cursor.fetchall()
+        # 2. Check 24-Hour Expiration
+        cursor.execute("SELECT id, user_id, gmail, accepted_at FROM gmail_rentals WHERE status = 'Accepted' AND is_active = 1 AND expired_24h_notified = 0")
+        active_24h_tasks = cursor.fetchall()
 
-    for task in active_24h_tasks:
-        task_id, u_id, gmail, accepted_at = task
-        if accepted_at:
-            dt = datetime.strptime(accepted_at.split(".")[0], "%Y-%m-%d %H:%M:%S")
-            if (now - dt).total_seconds() >= 86400: # 24 Hours
-                cursor.execute("UPDATE gmail_rentals SET is_active = 0, expired_24h_notified = 1 WHERE id = ?", (task_id,))
-                conn.commit()
+        for task in active_24h_tasks:
+            task_id, u_id, gmail, accepted_at = task
+            accepted_dt = parse_db_date(accepted_at)
+            if accepted_dt:
+                if (now - accepted_dt).total_seconds() >= 86400: # 24 Hours
+                    cursor.execute("UPDATE gmail_rentals SET is_active = 0, expired_24h_notified = 1 WHERE id = ?", (task_id,))
+                    conn.commit()
 
-                offboard_msg = (
-                    f"🎁 **Your sell bonus has been added! All main bonuses added.**\n\n"
-                    f"📧 **Gmail Task:** `{gmail}`\n\n"
-                    f"Please submit again ID & Pass for a new task!\n\n"
-                    f"💡 *You can disconnect your Gmail and sell on another platform, OR continue using our service—the bot pays you cents every day!*"
-                )
-                try:
-                    await context.bot.send_message(chat_id=u_id, text=offboard_msg, parse_mode="Markdown")
-                except Exception:
-                    pass
+                    offboard_msg = (
+                        f"🎁 **Your sell bonus has been added! All main bonuses added.**\n\n"
+                        f"📧 **Gmail Task:** `{gmail}`\n\n"
+                        f"Please submit again ID & Pass for a new task!\n\n"
+                        f"💡 *You can disconnect your Gmail and sell on another platform, OR continue using our service—the bot pays you cents every day!*"
+                    )
+                    try:
+                        await context.bot.send_message(chat_id=u_id, text=offboard_msg, parse_mode="Markdown")
+                    except Exception:
+                        pass
 
-    # 3. Check IST Quiet Hours (12:00 AM to 9:00 AM IST)
-    ist_tz = pytz.timezone('Asia/Kolkata')
-    ist_now = datetime.now(ist_tz)
-    current_hour = ist_now.hour
+        # 3. Check IST Quiet Hours (12:00 AM to 9:00 AM IST)
+        ist_tz = pytz.timezone('Asia/Kolkata')
+        ist_now = datetime.now(ist_tz)
+        if 0 <= ist_now.hour < 9:
+            conn.close()
+            return
 
-    if 0 <= current_hour < 9:
-        conn.close()
-        return
+        # 4. Endless 30-Min Nudges
+        cursor.execute("SELECT id, user_id, gmail, last_nudge_at FROM gmail_rentals WHERE bonus_3h_given = 1 AND is_active = 0 AND status = 'Accepted' AND expired_24h_notified = 0")
+        pending_updates = cursor.fetchall()
 
-    # 4. Endless 30-Min Nudges for Pending Cookie Updates
-    cursor.execute("SELECT id, user_id, gmail, last_nudge_at FROM gmail_rentals WHERE bonus_3h_given = 1 AND is_active = 0 AND status = 'Accepted' AND expired_24h_notified = 0")
-    pending_updates = cursor.fetchall()
-
-    for task in pending_updates:
-        task_id, u_id, gmail, last_nudge = task
-        should_nudge = False
-        if not last_nudge:
-            should_nudge = True
-        else:
-            last_dt = datetime.strptime(last_nudge.split(".")[0], "%Y-%m-%d %H:%M:%S")
-            if (now - last_dt).total_seconds() >= 1800: # 30 mins
+        for task in pending_updates:
+            task_id, u_id, gmail, last_nudge = task
+            should_nudge = False
+            last_dt = parse_db_date(last_nudge)
+            if not last_dt:
+                should_nudge = True
+            elif (now - last_dt).total_seconds() >= 1800: # 30 mins
                 should_nudge = True
 
-        if should_nudge:
-            cursor.execute("UPDATE gmail_rentals SET last_nudge_at = ? WHERE id = ?", (now, task_id))
-            conn.commit()
+            if should_nudge:
+                now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+                cursor.execute("UPDATE gmail_rentals SET last_nudge_at = ? WHERE id = ?", (now_str, task_id))
+                conn.commit()
 
-            nudge_msg = (
-                f"🔔 **COOKIE UPDATE REMINDER**\n\n"
-                f"Gmail Task: `{gmail}`\n"
-                f"Please update your cookies using the new method to reactivate earnings!"
-            )
-            buttons = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Update Now", callback_data=f"updcookie_{task_id}")],
-                [InlineKeyboardButton("▶️ How to Update (Method Video)", url=COOKIE_TUTORIAL_URL)],
-                [InlineKeyboardButton("⏳ Submit Later", callback_data="submit_later")]
-            ])
-            try:
-                await context.bot.send_message(chat_id=u_id, text=nudge_msg, reply_markup=buttons, parse_mode="Markdown")
-            except Exception:
-                pass
+                nudge_msg = (
+                    f"🔔 **COOKIE UPDATE REMINDER**\n\n"
+                    f"Gmail Task: `{gmail}`\n"
+                    f"Please update your cookies using the new method to reactivate earnings!"
+                )
+                buttons = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Update Now", callback_data=f"updcookie_{task_id}")],
+                    [InlineKeyboardButton("▶️ How to Update (Method Video)", url=COOKIE_TUTORIAL_URL)],
+                    [InlineKeyboardButton("⏳ Submit Later", callback_data="submit_later")]
+                ])
+                try:
+                    await context.bot.send_message(chat_id=u_id, text=nudge_msg, reply_markup=buttons, parse_mode="Markdown")
+                except Exception:
+                    pass
 
-    conn.close()
+        conn.close()
+    except Exception as general_err:
+        print(f"Background Loop Error Caught: {general_err}")
 
-# 11. ADMIN COMMANDS (BROADCAST, BALANCE, TASK BALANCE, ACTIVATION, MSG)
+# 11. ADMIN COMMANDS
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -792,8 +820,8 @@ async def activate_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         u_id, gmail = row
-        now = datetime.now()
-        cursor.execute("UPDATE gmail_rentals SET is_active = 1, status = 'Accepted', accepted_at = ? WHERE id = ?", (now, task_id))
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("UPDATE gmail_rentals SET is_active = 1, status = 'Accepted', accepted_at = ? WHERE id = ?", (now_str, task_id))
         conn.commit()
         conn.close()
 
@@ -933,5 +961,5 @@ if __name__ == '__main__':
     if app.job_queue:
         app.job_queue.run_repeating(background_timer_job, interval=60, first=10)
 
-    print("Rental Bot starting with Broadcast registered...")
+    print("Rental Bot online and hardened...")
     app.run_polling()
