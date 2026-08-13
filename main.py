@@ -4,16 +4,35 @@ import json
 import os
 import time
 import threading
+from flask import Flask
 
 # ==================== CONFIGURATION ====================
 BOT_TOKEN = "8995026167:AAHyNo5GyPeOa4FnkIcQ5cs_TQUBe9gwsIw"  # Insert Telegram Bot Token from @BotFather
-ADMIN_ID =  6112720850 # Insert your numeric Telegram User ID
+ADMIN_ID = 6112720850  # Insert your numeric Telegram User ID
 REQUIRED_CHANNEL = "@googlejobhubsudeb"  # Must include '@', e.g., @MyRentalChannel
 TUTORIAL_URL = "https://t.me/googlejobhubsudeb/3415"  # Link to video or tutorial channel
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-# ==================== DATABASE SIMULATION ====================
+# ==================== RENDER KEEP-ALIVE SERVER ====================
+# Prevents "No open ports detected" error on Render Web Services
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is running online 24/7!"
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Threading_Thread = threading.Thread(target=run_web_server, daemon=True)
+    Threading_Thread.start()
+
+keep_alive()
+
+# ==================== DATABASE SYSTEM ====================
 DATA_FILE = "database.json"
 
 def load_data():
@@ -48,19 +67,17 @@ user_states = {}
 
 # ==================== BACKGROUND 6-HOUR ALARM THREAD ====================
 def start_reminder_alarm():
-    """Background worker that alerts Admin if an Active task hasn't been updated in 6 hours."""
+    """Background worker that alerts Admin if an Active task hasn't had balance updated in 6 hours."""
     while True:
         try:
             current_time = time.time()
             six_hours_sec = 6 * 3600  # 21,600 seconds
             
             for tid, t_data in list(db["tasks"].items()):
-                # Only monitor Active tasks
                 if t_data.get("status") == "Active":
                     last_update = t_data.get("last_updated", current_time)
                     last_alert = t_data.get("last_alert_sent", 0)
                     
-                    # Check if 6 hours passed since last balance update AND last alert
                     if (current_time - last_update >= six_hours_sec) and (current_time - last_alert >= six_hours_sec):
                         alarm_msg = (
                             f"⏰ <b>INACTIVITY ALARM REMINDER!</b>\n"
@@ -83,11 +100,10 @@ def start_reminder_alarm():
             
         time.sleep(600)  # Check every 10 minutes
 
-# Start the alarm thread
 alarm_thread = threading.Thread(target=start_reminder_alarm, daemon=True)
 alarm_thread.start()
 
-# ==================== HELPER FUNCTIONS ====================
+# ==================== HELPER FUNCTIONS & MIDDLEWARE ====================
 def is_subscribed(user_id):
     try:
         member = bot.get_chat_member(REQUIRED_CHANNEL, user_id)
@@ -444,15 +460,14 @@ def admin_task_action(call):
 
     if action == "acc":
         task["status"] = "Active"
-        task["earned"] = 15.0
-        task["last_updated"] = time.time()  # Reset 6h timer on activation
-        db["users"][user_id]["balance"] += 15.0
+        task["earned"] = 0.0  # ZERO AUTOMATIC BALANCE ADDED
+        task["last_updated"] = time.time()  # Starts the 6h inactivity timer
         save_data(db)
 
         bot.edit_message_text(f"✅ <b>Accepted Task:</b> {task_id}", call.message.chat.id, call.message.message_id)
         bot.send_message(
             user_id,
-            f"🎉 <b>Gmail Accepted!</b>\n\nYour task <code>{task_id}</code> is active.\nBonus ₹15 added to your balance!"
+            f"🎉 <b>Gmail Accepted!</b>\n\nYour task <code>{task_id}</code> is now active."
         )
     elif action == "rej":
         task["status"] = "Rejected"
@@ -496,7 +511,7 @@ def toggle_task_status(message):
             new_status = "Active" if cmd == "/task_active" else "Offline"
             db["tasks"][tid]["status"] = new_status
             if new_status == "Active":
-                db["tasks"][tid]["last_updated"] = time.time()  # Reset 6h timer
+                db["tasks"][tid]["last_updated"] = time.time()
             save_data(db)
             bot.reply_to(message, f"✅ Task <code>{tid}</code> status set to <b>{new_status}</b>.")
         else:
@@ -517,7 +532,7 @@ def manage_task_balance(message):
             if cmd == "/add_task_bal":
                 t["earned"] = t.get("earned", 0.0) + amt
                 db["users"][uid]["balance"] += amt
-                t["last_updated"] = time.time()  # Reset 6h timer on adding balance
+                t["last_updated"] = time.time()  # Reset 6h timer on manual update
             else:
                 t["earned"] = max(0.0, t.get("earned", 0.0) - amt)
                 db["users"][uid]["balance"] = max(0.0, db["users"][uid]["balance"] - amt)
@@ -587,6 +602,5 @@ def broadcast_msg(message):
 
 # ==================== BOT LAUNCH ====================
 if __name__ == "__main__":
-    print("🤖 Gmail Rental Bot Running with 6h Alarm...")
+    print("🤖 Gmail Rental Bot Running Clean on Render...")
     bot.infinity_polling(skip_pending=True)
-
