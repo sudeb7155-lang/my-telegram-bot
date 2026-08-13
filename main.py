@@ -6,7 +6,7 @@ import time
 import threading
 
 # ==================== CONFIGURATION ====================
-BOT_TOKEN = "8995026167:AAFvv4lugLm5ZWHcf4KGZrnY7PKJnVHcrEM"  # Insert Telegram Bot Token from @BotFather
+BOT_TOKEN = "8995026167:AAHyNo5GyPeOa4FnkIcQ5cs_TQUBe9gwsIw"  # Insert Telegram Bot Token from @BotFather
 ADMIN_ID =  6112720850 # Insert your numeric Telegram User ID
 REQUIRED_CHANNEL = "@googlejobhubsudeb"  # Must include '@', e.g., @MyRentalChannel
 TUTORIAL_URL = "https://t.me/googlejobhubsudeb/3415"  # Link to video or tutorial channel
