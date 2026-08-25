@@ -2,7 +2,7 @@ import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 # 1. Put your actual bot token here
-BOT_TOKEN = "8932528165:AAGCsidU65K984KSEXPW8QcdVxT3bVjPBkk"
+BOT_TOKEN = "8902730851:AAHBRDhlBe_7Bslo691CzbatqYL6KkMEjYk"
 
 # 2. Channel & Link Settings (Bot must be an ADMIN in this channel)
 CHANNEL_ID = "@googlejobhubsudeb"
