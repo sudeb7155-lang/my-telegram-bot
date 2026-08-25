@@ -1,10 +1,9 @@
-import time
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 # --- Configurations ---
 BOT_TOKEN = "8902730851:AAHBRDhlBe_7Bslo691CzbatqYL6KkMEjYk"
-ADMIN_ID =  6112720850 # Replace with your numerical Telegram user ID
+ADMIN_ID = 6112720850
 
 CHANNEL_ID = "@googlejobhubsudeb"
 CHANNEL_LINK = "https://t.me/googlejobhubsudeb"
@@ -26,12 +25,15 @@ IMG_SUPPORT         = "https://i.postimg.cc/QthSg2Qy/1787650073869.png"
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-# In-memory storage
+# In-memory database structures
 users = {}          # {user_id: {"balance": 0.0, "pending": 0.0, "referrer": id, "referrals": 0, "referral_approvals": 0}}
-tasks = {}          # {task_id: {"user_id": id, "email": str, "field2": str, "field3": str, "field4": str, "status": str}}
+tasks = {}          # {task_id: {"user_id": id, "step1": str, "step2": str, "step3": str, "step4": str, "status": str}}
+withdrawals = {}    # {wd_id: {"user_id": id, "amount": float, "method": str, "address": str, "status": str}}
 user_sessions = {}   # {user_id: {"step": str, "data": dict}}
-admin_broadcast_state = {} # Stores broadcast draft state for admin
+admin_broadcast_state = {}
+
 task_counter = 1001
+withdraw_counter = 5001
 
 
 def get_user(user_id, referrer_id=None):
@@ -73,7 +75,7 @@ def cancel_btn():
     return markup
 
 
-# --- Entry & Membership ---
+# --- Entry Point ---
 
 @bot.message_handler(commands=["start"])
 def handle_start(message):
@@ -101,7 +103,10 @@ def handle_start(message):
         markup = InlineKeyboardMarkup()
         markup.row(InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK))
         markup.row(InlineKeyboardButton("Check ✅", callback_data="check_sub"))
-        bot.send_photo(chat_id, photo=IMG_ACCESS_DENIED, caption=text, reply_markup=markup)
+        try:
+            bot.send_photo(chat_id, photo=IMG_ACCESS_DENIED, caption=text, reply_markup=markup)
+        except Exception:
+            bot.send_message(chat_id, text=text, reply_markup=markup)
 
 
 def send_home(chat_id):
@@ -113,10 +118,13 @@ def send_home(chat_id):
         "📋 Complete tasks to earn rewards\n"
         "🏁 Earn referral bonuses for active users"
     )
-    bot.send_photo(chat_id, photo=IMG_MAIN_DASHBOARD, caption=caption, reply_markup=main_menu())
+    try:
+        bot.send_photo(chat_id, photo=IMG_MAIN_DASHBOARD, caption=caption, reply_markup=main_menu())
+    except Exception:
+        bot.send_message(chat_id, text=caption, reply_markup=main_menu())
 
 
-# --- Admin Broadcast Engine with Live Images & Pinned Messages ---
+# --- Admin Broadcast Engine ---
 
 @bot.message_handler(commands=["broadcast", "broadcast_pin"])
 def broadcast_command(message):
@@ -146,16 +154,12 @@ def process_broadcast_creation(message):
 
     if step == "AWAIT_BC_IMAGE":
         img_input = message.text.strip()
-        if img_input.lower() != "skip":
-            state["image_url"] = img_input
-        else:
-            state["image_url"] = None
-
+        state["image_url"] = None if img_input.lower() == "skip" else img_input
         state["step"] = "AWAIT_BC_TEXT"
         bot.send_message(
             ADMIN_ID,
             "<b>Step 2:</b> Enter the broadcast message text.\n"
-            "• You can use Telegram Premium Emojis & HTML (<code>&lt;b&gt;bold&lt;/b&gt;</code>, <code>&lt;tg-emoji id=&quot;...&quot;&gt;🔥&lt;/tg-emoji&gt;</code>)."
+            "• Supports Telegram HTML & Premium Emojis."
         )
 
     elif step == "AWAIT_BC_TEXT":
@@ -177,14 +181,18 @@ def process_broadcast_creation(message):
             bot.send_message(ADMIN_ID, text=caption, reply_markup=preview_markup)
 
 
-# --- 4-Step Form Flow with Attached Images ---
+# --- Task Submission Wizard ---
 
 @bot.callback_query_handler(func=lambda call: call.data == "btn_task")
 def start_task(call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
 
-    user_sessions[user_id] = {"step": "STEP_1", "data": {}}
+    user_sessions[user_id] = {"flow": "TASK", "step": "STEP_1", "data": {}}
 
     caption = (
         "⚠️ <b>Before submit watch tutorial video carefully</b>\n\n"
@@ -194,88 +202,132 @@ def start_task(call):
     markup.row(InlineKeyboardButton("📺 Tutorial", url=GUIDE_LINK))
     markup.row(InlineKeyboardButton("❌ Cancel", callback_data="btn_cancel"))
 
-    bot.send_photo(chat_id, photo=IMG_STEP_1, caption=caption, reply_markup=markup)
+    try:
+        bot.send_photo(chat_id, photo=IMG_STEP_1, caption=caption, reply_markup=markup)
+    except Exception:
+        bot.send_message(chat_id, text=caption, reply_markup=markup)
 
+
+# --- Universal Form Inputs Handler (Tasks & Withdrawals) ---
 
 @bot.message_handler(func=lambda msg: msg.from_user.id in user_sessions)
-def handle_form_steps(message):
+def handle_user_inputs(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
     session = user_sessions[user_id]
-    step = session["step"]
+    flow = session.get("flow")
+    step = session.get("step")
+    text = message.text.strip()
 
-    # Step 1: Gmail
-    if step == "STEP_1":
-        val = message.text.strip()
-        if not val.endswith("@gmail.com") or "@" not in val:
-            bot.reply_to(
-                message,
-                "❌ <b>Invalid Gmail!</b> Address must end with <code>@gmail.com</code>:",
-                reply_markup=cancel_btn(),
+    # --- Task Flow ---
+    if flow == "TASK":
+        if step == "STEP_1":
+            if not text.lower().endswith("@gmail.com") or "@" not in text:
+                bot.reply_to(
+                    message,
+                    "❌ <b>Invalid Gmail!</b> Address must end with <code>@gmail.com</code>:",
+                    reply_markup=cancel_btn(),
+                )
+                return
+
+            session["data"]["step1"] = text
+            session["step"] = "STEP_2"
+            try:
+                bot.send_photo(chat_id, photo=IMG_STEP_2, caption="<b>Step 2:</b>", reply_markup=cancel_btn())
+            except Exception:
+                bot.send_message(chat_id, text="<b>Step 2:</b>", reply_markup=cancel_btn())
+
+        elif step == "STEP_2":
+            session["data"]["step2"] = text
+            session["step"] = "STEP_3"
+            try:
+                bot.send_photo(chat_id, photo=IMG_STEP_3, caption="<b>Step 3:</b>", reply_markup=cancel_btn())
+            except Exception:
+                bot.send_message(chat_id, text="<b>Step 3:</b>", reply_markup=cancel_btn())
+
+        elif step == "STEP_3":
+            session["data"]["step3"] = text
+            session["step"] = "STEP_4"
+            try:
+                bot.send_photo(chat_id, photo=IMG_STEP_4, caption="<b>Step 4:</b>", reply_markup=cancel_btn())
+            except Exception:
+                bot.send_message(chat_id, text="<b>Step 4:</b>", reply_markup=cancel_btn())
+
+        elif step == "STEP_4":
+            session["data"]["step4"] = text
+            session["step"] = "CONFIRM"
+
+            data = session["data"]
+            summary = (
+                "╔══════════════════════════╗\n"
+                "   📝 <b>TASK SUBMISSION BOX</b>\n"
+                "╚══════════════════════════╝\n\n"
+                f"📧 <b>Step 1:</b> <code>{data.get('step1')}</code>\n"
+                f"🔹 <b>Step 2:</b> <code>{data.get('step2')}</code>\n"
+                f"🔹 <b>Step 3:</b> <code>{data.get('step3')}</code>\n"
+                f"🔹 <b>Step 4:</b> <code>{data.get('step4')}</code>\n\n"
+                "<b>Done would you like to submit ❓</b>"
             )
-            return
+            markup = InlineKeyboardMarkup()
+            markup.row(
+                InlineKeyboardButton("Submit ✅", callback_data="btn_submit_final"),
+                InlineKeyboardButton("Cancel ❌", callback_data="btn_cancel"),
+            )
+            try:
+                bot.send_photo(chat_id, photo=IMG_TASK_REVIEW_BOX, caption=summary, reply_markup=markup)
+            except Exception:
+                bot.send_message(chat_id, text=summary, reply_markup=markup)
 
-        session["data"]["email"] = val
-        session["step"] = "STEP_2"
-        bot.send_photo(
+    # --- Withdrawal Address Input Flow ---
+    elif flow == "WITHDRAW" and step == "AWAIT_ADDRESS":
+        global withdraw_counter
+        method = session["data"]["method"]
+        user = get_user(user_id)
+        amount = user["balance"]
+
+        wd_id = str(withdraw_counter)
+        withdraw_counter += 1
+
+        # Deduct balance immediately
+        user["balance"] = 0.0
+        user_sessions.pop(user_id, None)
+
+        withdrawals[wd_id] = {
+            "user_id": user_id,
+            "amount": amount,
+            "method": method,
+            "address": text,
+            "status": "pending"
+        }
+
+        bot.send_message(
             chat_id,
-            photo=IMG_STEP_2,
-            caption="<b>Step 2:</b> Enter your worker username / name:",
-            reply_markup=cancel_btn(),
+            f"✅ <b>Withdrawal Request Submitted!</b>\n\n"
+            f"🆔 <b>Request ID:</b> <code>#{wd_id}</code>\n"
+            f"💵 <b>Amount:</b> ${amount:.2f}\n"
+            f"💳 <b>Method:</b> {method}\n"
+            f"📍 <b>Account/Address:</b> <code>{text}</code>\n\n"
+            "<i>Your request is being reviewed by the admin. You will be notified once processed!</i>"
         )
+        send_home(chat_id)
 
-    # Step 2: Name & 3-sec check simulation
-    elif step == "STEP_2":
-        session["data"]["field2"] = message.text.strip()
-        
-        status_msg = bot.send_message(chat_id, "⏳ <i>Hold on we are checking 3 second waiting checking.....</i>")
-        time.sleep(3)
+        # Notify Admin
+        admin_card = (
+            f"🚨 <b>NEW WITHDRAWAL REQUEST (#{wd_id})</b>\n\n"
+            f"👤 <b>User ID:</b> <code>{user_id}</code>\n"
+            f"💵 <b>Amount:</b> ${amount:.2f}\n"
+            f"💳 <b>Method:</b> {method}\n"
+            f"📍 <b>Address/UPI:</b> <code>{text}</code>"
+        )
+        admin_markup = InlineKeyboardMarkup()
+        admin_markup.row(
+            InlineKeyboardButton("Paid / Approve ✅", callback_data=f"wdapp_{wd_id}"),
+            InlineKeyboardButton("Reject ❌", callback_data=f"wdrej_{wd_id}")
+        )
         try:
-            bot.delete_message(chat_id, status_msg.message_id)
+            bot.send_message(ADMIN_ID, admin_card, reply_markup=admin_markup)
         except Exception:
             pass
-
-        session["step"] = "STEP_3"
-        bot.send_photo(
-            chat_id,
-            photo=IMG_STEP_3,
-            caption="<b>Step 3:</b> Enter your task proof / work reference ID:",
-            reply_markup=cancel_btn(),
-        )
-
-    # Step 3: Reference
-    elif step == "STEP_3":
-        session["data"]["field3"] = message.text.strip()
-        session["step"] = "STEP_4"
-        bot.send_photo(
-            chat_id,
-            photo=IMG_STEP_4,
-            caption="<b>Step 4:</b> Enter any additional task notes (or type 'None'):",
-            reply_markup=cancel_btn(),
-        )
-
-    # Step 4: Notes & Final Confirmation Box
-    elif step == "STEP_4":
-        session["data"]["field4"] = message.text.strip()
-        session["step"] = "CONFIRM"
-
-        data = session["data"]
-        summary = (
-            "╔══════════════════════════╗\n"
-            "   📝 <b>TASK SUBMISSION BOX</b>\n"
-            "╚══════════════════════════╝\n\n"
-            f"📧 <b>Gmail:</b> <code>{data['email']}</code>\n"
-            f"👤 <b>Worker:</b> <code>{data['field2']}</code>\n"
-            f"🆔 <b>Task Proof:</b> <code>{data['field3']}</code>\n"
-            f"📝 <b>Notes:</b> <code>{data['field4']}</code>\n\n"
-            "<b>Done would you like to submit ❓</b>"
-        )
-        markup = InlineKeyboardMarkup()
-        markup.row(
-            InlineKeyboardButton("Submit ✅", callback_data="btn_submit_final"),
-            InlineKeyboardButton("Cancel ❌", callback_data="btn_cancel"),
-        )
-        bot.send_photo(chat_id, photo=IMG_TASK_REVIEW_BOX, caption=summary, reply_markup=markup)
 
 
 # --- Callback Router ---
@@ -285,6 +337,11 @@ def handle_callbacks(call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id
     global task_counter
+
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
 
     # Broadcast Execution
     if call.data == "adm_cancel_bc":
@@ -320,18 +377,21 @@ def handle_callbacks(call):
             except Exception:
                 continue
 
-        bot.send_message(ADMIN_ID, f"✅ <b>Broadcast Completed!</b>\nSuccessfully delivered to {sent_count} users.")
+        bot.send_message(ADMIN_ID, f"✅ <b>Broadcast Completed!</b>\nDelivered to {sent_count} users.")
 
     elif call.data == "check_sub":
         if is_channel_member(user_id):
-            bot.delete_message(chat_id, call.message.id)
+            try:
+                bot.delete_message(chat_id, call.message.id)
+            except Exception:
+                pass
             send_home(chat_id)
         else:
-            bot.answer_callback_query(call.id, "❌ You have not joined the channel yet!", show_alert=True)
+            bot.send_message(chat_id, "❌ You have not joined the channel yet!")
 
     elif call.data == "btn_cancel":
         user_sessions.pop(user_id, None)
-        bot.send_message(chat_id, "❌ Task submission cancelled.")
+        bot.send_message(chat_id, "❌ Action cancelled.")
         send_home(chat_id)
 
     elif call.data == "btn_submit_final":
@@ -342,10 +402,10 @@ def handle_callbacks(call):
 
             tasks[task_id] = {
                 "user_id": user_id,
-                "email": data.get("email"),
-                "field2": data.get("field2"),
-                "field3": data.get("field3"),
-                "field4": data.get("field4"),
+                "step1": data.get("step1"),
+                "step2": data.get("step2"),
+                "step3": data.get("step3"),
+                "step4": data.get("step4"),
                 "status": "pending",
             }
             users[user_id]["pending"] += 0.20
@@ -357,16 +417,19 @@ def handle_callbacks(call):
             )
             markup = InlineKeyboardMarkup()
             markup.row(InlineKeyboardButton("🔙 Back", callback_data="btn_back"))
-            bot.send_photo(chat_id, photo=IMG_TASK_SUBMITTED, caption=caption, reply_markup=markup)
+            try:
+                bot.send_photo(chat_id, photo=IMG_TASK_SUBMITTED, caption=caption, reply_markup=markup)
+            except Exception:
+                bot.send_message(chat_id, text=caption, reply_markup=markup)
 
-            # Admin Review Card
+            # Notify Admin
             admin_msg = (
                 f"🔔 <b>New Task Submitted (#{task_id})</b>\n\n"
                 f"👤 <b>User ID:</b> <code>{user_id}</code>\n"
-                f"📧 <b>Gmail:</b> <code>{data.get('email')}</code>\n"
-                f"👤 <b>Worker:</b> <code>{data.get('field2')}</code>\n"
-                f"🆔 <b>Proof:</b> <code>{data.get('field3')}</code>\n"
-                f"📝 <b>Notes:</b> <code>{data.get('field4')}</code>"
+                f"📧 <b>Step 1:</b> <code>{data.get('step1')}</code>\n"
+                f"🔹 <b>Step 2:</b> <code>{data.get('step2')}</code>\n"
+                f"🔹 <b>Step 3:</b> <code>{data.get('step3')}</code>\n"
+                f"🔹 <b>Step 4:</b> <code>{data.get('step4')}</code>"
             )
             admin_markup = InlineKeyboardMarkup()
             admin_markup.row(
@@ -378,17 +441,15 @@ def handle_callbacks(call):
             except Exception:
                 pass
 
-    # Admin actions
+    # Admin Task Review
     elif call.data.startswith("adm_"):
         if user_id != ADMIN_ID:
-            bot.answer_callback_query(call.id, "Unauthorized.", show_alert=True)
             return
 
         action, tid = call.data.split("_")[1], call.data.split("_")[2]
         task = tasks.get(tid)
 
         if not task or task["status"] != "pending":
-            bot.answer_callback_query(call.id, "Already processed.", show_alert=True)
             return
 
         t_user_id = task["user_id"]
@@ -413,14 +474,65 @@ def handle_callbacks(call):
                 except Exception:
                     pass
 
-            bot.send_message(t_user_id, f"🎉 <b>Task #{tid} Approved!</b>\n+$0.20 added to your active balance.")
+            try:
+                bot.send_message(t_user_id, f"🎉 <b>Task #{tid} Approved!</b>\n+$0.20 added to your active balance.")
+            except Exception:
+                pass
             bot.edit_message_text(f"✅ <b>Task #{tid} Approved</b> by Admin.", chat_id=ADMIN_ID, message_id=call.message.id)
 
         elif action == "rej":
             task["status"] = "rejected"
             t_user["pending"] = max(0.0, t_user["pending"] - 0.20)
-            bot.send_message(t_user_id, f"❌ <b>Task #{tid} Rejected.</b>")
+            try:
+                bot.send_message(t_user_id, f"❌ <b>Task #{tid} Rejected.</b>")
+            except Exception:
+                pass
             bot.edit_message_text(f"❌ <b>Task #{tid} Rejected</b> by Admin.", chat_id=ADMIN_ID, message_id=call.message.id)
+
+    # --- Admin Withdrawal Review ---
+    elif call.data.startswith("wdapp_") or call.data.startswith("wdrej_"):
+        if user_id != ADMIN_ID:
+            return
+
+        action = "app" if call.data.startswith("wdapp_") else "rej"
+        wd_id = call.data.split("_")[1]
+        wd = withdrawals.get(wd_id)
+
+        if not wd or wd["status"] != "pending":
+            return
+
+        t_user_id = wd["user_id"]
+        t_user = users.get(t_user_id, {})
+
+        if action == "app":
+            wd["status"] = "approved"
+            try:
+                bot.send_message(
+                    t_user_id,
+                    f"🎉 <b>Payment Received & Approved! ✅</b>\n\n"
+                    f"💵 <b>Amount:</b> ${wd['amount']:.2f}\n"
+                    f"💳 <b>Method:</b> {wd['method']}\n"
+                    f"📍 <b>Account/Address:</b> <code>{wd['address']}</code>\n\n"
+                    "<i>Your payout has been transferred successfully!</i>"
+                )
+            except Exception:
+                pass
+            bot.edit_message_text(f"✅ <b>Withdrawal #{wd_id} Marked as Paid / Approved.</b>", chat_id=ADMIN_ID, message_id=call.message.id)
+
+        elif action == "rej":
+            wd["status"] = "rejected"
+            # Refund the balance back to user
+            t_user["balance"] += wd["amount"]
+            try:
+                bot.send_message(
+                    t_user_id,
+                    f"❌ <b>Withdrawal Request #{wd_id} Rejected.</b>\n\n"
+                    f"Your requested amount of <b>${wd['amount']:.2f}</b> has been refunded to your active balance.\n"
+                    "Please double check your payment address and request again."
+                )
+            except Exception:
+                pass
+            bot.edit_message_text(f"❌ <b>Withdrawal #{wd_id} Rejected & Refunded.</b>", chat_id=ADMIN_ID, message_id=call.message.id)
 
     elif call.data == "btn_back":
         send_home(chat_id)
@@ -428,13 +540,13 @@ def handle_callbacks(call):
     elif call.data == "btn_status":
         history_lines = []
         for tid, t in tasks.items():
-            if t["user_id"] == user_id:
-                reward = " | Approved 0.20$+" if t["status"] == "approved" else ""
+            if t.get("user_id") == user_id:
+                status_raw = t.get("status", "pending")
+                reward = " | Approved 0.20$+" if status_raw == "approved" else ""
                 history_lines.append(
                     f"• <b>Task ID:</b> #{tid}\n"
-                    f"  Gmail: <code>{t['email']}</code>\n"
-                    f"  Proof: <code>{t['field3']}</code>\n"
-                    f"  Status: <b>{t['status'].upper()}</b>{reward}"
+                    f"  <b>Step 1:</b> <code>{t.get('step1', 'N/A')}</code>\n"
+                    f"  <b>Status:</b> <b>{status_raw.upper()}</b>{reward}"
                 )
 
         history_str = "\n\n".join(history_lines) if history_lines else "No task submissions found."
@@ -444,7 +556,10 @@ def handle_callbacks(call):
         markup.row(InlineKeyboardButton("📋 Submit Task", callback_data="btn_task"))
         markup.row(InlineKeyboardButton("📺 Tutorial", url=GUIDE_LINK))
         markup.row(InlineKeyboardButton("🔙 Back", callback_data="btn_back"))
-        bot.send_photo(chat_id, photo=IMG_ACCOUNT_STATUS, caption=caption, reply_markup=markup)
+        try:
+            bot.send_photo(chat_id, photo=IMG_ACCOUNT_STATUS, caption=caption, reply_markup=markup)
+        except Exception:
+            bot.send_message(chat_id, text=caption, reply_markup=markup)
 
     elif call.data == "btn_balance":
         u = get_user(user_id)
@@ -457,7 +572,10 @@ def handle_callbacks(call):
         markup = InlineKeyboardMarkup()
         markup.row(InlineKeyboardButton("💳 Withdrawal", callback_data="btn_withdraw"))
         markup.row(InlineKeyboardButton("🔙 Back", callback_data="btn_back"))
-        bot.send_photo(chat_id, photo=IMG_BALANCE, caption=caption, reply_markup=markup)
+        try:
+            bot.send_photo(chat_id, photo=IMG_BALANCE, caption=caption, reply_markup=markup)
+        except Exception:
+            bot.send_message(chat_id, text=caption, reply_markup=markup)
 
     elif call.data == "btn_referral":
         u = get_user(user_id)
@@ -478,7 +596,10 @@ def handle_callbacks(call):
         )
         markup = InlineKeyboardMarkup()
         markup.row(InlineKeyboardButton("🔙 Back", callback_data="btn_back"))
-        bot.send_photo(chat_id, photo=IMG_REFERRAL, caption=caption, reply_markup=markup)
+        try:
+            bot.send_photo(chat_id, photo=IMG_REFERRAL, caption=caption, reply_markup=markup)
+        except Exception:
+            bot.send_message(chat_id, text=caption, reply_markup=markup)
 
     elif call.data == "btn_support":
         caption = (
@@ -488,16 +609,41 @@ def handle_callbacks(call):
         )
         markup = InlineKeyboardMarkup()
         markup.row(InlineKeyboardButton("🔙 Back", callback_data="btn_back"))
-        bot.send_photo(chat_id, photo=IMG_SUPPORT, caption=caption, reply_markup=markup)
+        try:
+            bot.send_photo(chat_id, photo=IMG_SUPPORT, caption=caption, reply_markup=markup)
+        except Exception:
+            bot.send_message(chat_id, text=caption, reply_markup=markup)
 
+    # --- Withdrawal Selection Menu ---
     elif call.data == "btn_withdraw":
         u = get_user(user_id)
         if u["balance"] < 0.20:
-            bot.answer_callback_query(call.id, "❌ Minimum withdrawal balance is $0.20!", show_alert=True)
+            bot.send_message(chat_id, "❌ <b>Minimum withdrawal balance is $0.20 / ₹18!</b>")
         else:
-            bot.answer_callback_query(call.id, "✅ Withdrawal requested! Admin will process your payout.", show_alert=True)
+            text = (
+                "💳 <b>Select Your Payment Method:</b>\n\n"
+                f"💵 <b>Available Balance:</b> ${u['balance']:.2f}\n\n"
+                "Choose an option below to proceed:"
+            )
+            markup = InlineKeyboardMarkup()
+            markup.row(
+                InlineKeyboardButton("🇮🇳 UPI (India)", callback_data="wd_method_upi"),
+                InlineKeyboardButton("💵 USDT (Crypto)", callback_data="wd_method_usdt")
+            )
+            markup.row(InlineKeyboardButton("❌ Cancel", callback_data="btn_cancel"))
+            bot.send_message(chat_id, text=text, reply_markup=markup)
+
+    elif call.data in ["wd_method_upi", "wd_method_usdt"]:
+        method = "UPI (India)" if call.data == "wd_method_upi" else "USDT (BEP20 / TRC20)"
+        user_sessions[user_id] = {
+            "flow": "WITHDRAW",
+            "step": "AWAIT_ADDRESS",
+            "data": {"method": method}
+        }
+        prompt_text = "🇮🇳 <b>Enter your UPI ID</b> (e.g., <code>example@upi</code>):" if call.data == "wd_method_upi" else "💵 <b>Enter your USDT Wallet Address</b>:"
+        bot.send_message(chat_id, f"{prompt_text}", reply_markup=cancel_btn())
 
 
 if __name__ == "__main__":
     print("Bot is running...")
-    bot.infinity_polling()
+    bot.infinity_polling(skip_pending=True)
