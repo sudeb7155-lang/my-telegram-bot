@@ -10,7 +10,7 @@ from telegram.ext import (
 )
 
 # 1. Put your actual bot token here
-BOT_TOKEN = ""
+BOT_TOKEN = "8932528165:AAGCsidU65K984KSEXPW8QcdVxT3bVjPBkk"
 
 # 2. Channel settings (Make sure your bot is an ADMIN in this channel)
 CHANNEL_ID = "@googlejobhubsudeb"
