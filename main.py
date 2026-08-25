@@ -1,10 +1,32 @@
 import io
+import os
+import threading
 import urllib.request
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+# --- Background HTTP Server (Render Port Binding & UptimeRobot Ping) ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"OK")
+    
+    def log_message(self, format, *args):
+        return  # Suppress console log spam from UptimeRobot pings
+
+def start_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    server.serve_forever()
+
+threading.Thread(target=start_health_server, daemon=True).start()
+
+
 # --- Configurations ---
-BOT_TOKEN = "8902730851:AAGkd2yeSywLUWdwGK7S-Q0RhTLMo84HpA0"
+BOT_TOKEN = "8902730851:AAEr6i97ZxEkYgLxwBCgONRqsiUjrww3EUw"
 ADMIN_ID = 6112720850
 
 CHANNEL_ID = "@googlejobhubsudeb"
@@ -77,7 +99,7 @@ def is_channel_member(user_id):
         member = bot.get_chat_member(CHANNEL_ID, user_id)
         return member.status in ["creator", "administrator", "member"]
     except Exception:
-        return True  # Fallback to avoid blocking testing if channel isn't bound
+        return True
 
 
 def main_menu():
@@ -318,7 +340,6 @@ def handle_callbacks(call):
     except Exception:
         pass
 
-    # Start Task
     if call.data == "btn_task":
         user_sessions[user_id] = {"flow": "TASK", "step": "STEP_1", "data": {}}
         caption = (
@@ -330,7 +351,6 @@ def handle_callbacks(call):
         markup.row(InlineKeyboardButton("❌ Cancel", callback_data="btn_cancel"))
         send_safe_photo(chat_id, IMG_STEP_1, caption=caption, reply_markup=markup)
 
-    # Submit Task Final Step
     elif call.data == "btn_submit_final":
         session = user_sessions.pop(user_id, None)
         if session and "data" in session:
@@ -378,7 +398,6 @@ def handle_callbacks(call):
             bot.send_message(chat_id, "⚠️ No active task found. Please restart via Task button.")
             send_home(chat_id)
 
-    # Broadcast Execution
     elif call.data == "adm_cancel_bc":
         admin_broadcast_state.pop(ADMIN_ID, None)
         bot.send_message(ADMIN_ID, "❌ Broadcast cancelled.")
@@ -396,7 +415,6 @@ def handle_callbacks(call):
         sent_count = 0
         bot.send_message(ADMIN_ID, "⏳ <i>Sending broadcast to all bot users...</i>")
 
-        # Collect target users (fallback to ADMIN_ID if users dict is empty during test)
         target_ids = set(users.keys())
         target_ids.add(ADMIN_ID)
 
@@ -430,7 +448,6 @@ def handle_callbacks(call):
         bot.send_message(chat_id, "❌ Action cancelled.")
         send_home(chat_id)
 
-    # Admin Task Review
     elif call.data.startswith("adm_app_") or call.data.startswith("adm_rej_"):
         if user_id != ADMIN_ID:
             return
@@ -479,7 +496,6 @@ def handle_callbacks(call):
                 pass
             bot.send_message(ADMIN_ID, f"❌ <b>Task #{tid} Rejected</b> by Admin.")
 
-    # Admin Withdrawal Review
     elif call.data.startswith("wdapp_") or call.data.startswith("wdrej_"):
         if user_id != ADMIN_ID:
             return
