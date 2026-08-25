@@ -1,3 +1,5 @@
+import io
+import urllib.request
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -29,11 +31,42 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 users = {}          # {user_id: {"balance": 0.0, "pending": 0.0, "referrer": id, "referrals": 0, "referral_approvals": 0}}
 tasks = {}          # {task_id: {"user_id": id, "step1": str, "step2": str, "step3": str, "step4": str, "status": str}}
 withdrawals = {}    # {wd_id: {"user_id": id, "amount": float, "method": str, "address": str, "status": str}}
-user_sessions = {}   # {user_id: {"step": str, "data": dict}}
+user_sessions = {}   # {user_id: {"flow": str, "step": str, "data": dict}}
 admin_broadcast_state = {}
 
 task_counter = 1001
 withdraw_counter = 5001
+
+
+# --- Reliable Image Sender (Downloads Bytes Directly) ---
+def send_safe_photo(chat_id, url, caption="", reply_markup=None):
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    
+    # Attempt 1: Download image buffer with custom User-Agent
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=6) as response:
+            img_data = response.read()
+            img_io = io.BytesIO(img_data)
+            img_io.name = "photo.jpg"
+            return bot.send_photo(chat_id, photo=img_io, caption=caption, reply_markup=reply_markup)
+    except Exception:
+        pass
+
+    # Attempt 2: Direct URL pass-through
+    try:
+        return bot.send_photo(chat_id, photo=url, caption=caption, reply_markup=reply_markup)
+    except Exception:
+        pass
+
+    # Attempt 3: Guaranteed Main Banner fallback
+    try:
+        return bot.send_photo(chat_id, photo=IMG_MAIN_DASHBOARD, caption=caption, reply_markup=reply_markup)
+    except Exception:
+        pass
+
+    # Attempt 4: Text fallback
+    return bot.send_message(chat_id, text=caption, reply_markup=reply_markup)
 
 
 def get_user(user_id, referrer_id=None):
@@ -103,10 +136,7 @@ def handle_start(message):
         markup = InlineKeyboardMarkup()
         markup.row(InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK))
         markup.row(InlineKeyboardButton("Check ✅", callback_data="check_sub"))
-        try:
-            bot.send_photo(chat_id, photo=IMG_ACCESS_DENIED, caption=text, reply_markup=markup)
-        except Exception:
-            bot.send_message(chat_id, text=text, reply_markup=markup)
+        send_safe_photo(chat_id, IMG_ACCESS_DENIED, caption=text, reply_markup=markup)
 
 
 def send_home(chat_id):
@@ -118,10 +148,7 @@ def send_home(chat_id):
         "📋 Complete tasks to earn rewards\n"
         "🏁 Earn referral bonuses for active users"
     )
-    try:
-        bot.send_photo(chat_id, photo=IMG_MAIN_DASHBOARD, caption=caption, reply_markup=main_menu())
-    except Exception:
-        bot.send_message(chat_id, text=caption, reply_markup=main_menu())
+    send_safe_photo(chat_id, IMG_MAIN_DASHBOARD, caption=caption, reply_markup=main_menu())
 
 
 # --- Admin Broadcast Engine ---
@@ -176,7 +203,7 @@ def process_broadcast_creation(message):
 
         bot.send_message(ADMIN_ID, f"🔍 <b>BROADCAST PREVIEW (Auto-Pin: {pin_flag})</b>:")
         if img_url:
-            bot.send_photo(ADMIN_ID, photo=img_url, caption=caption, reply_markup=preview_markup)
+            send_safe_photo(ADMIN_ID, img_url, caption=caption, reply_markup=preview_markup)
         else:
             bot.send_message(ADMIN_ID, text=caption, reply_markup=preview_markup)
 
@@ -202,10 +229,7 @@ def start_task(call):
     markup.row(InlineKeyboardButton("📺 Tutorial", url=GUIDE_LINK))
     markup.row(InlineKeyboardButton("❌ Cancel", callback_data="btn_cancel"))
 
-    try:
-        bot.send_photo(chat_id, photo=IMG_STEP_1, caption=caption, reply_markup=markup)
-    except Exception:
-        bot.send_message(chat_id, text=caption, reply_markup=markup)
+    send_safe_photo(chat_id, IMG_STEP_1, caption=caption, reply_markup=markup)
 
 
 # --- Universal Form Inputs Handler (Tasks & Withdrawals) ---
@@ -232,26 +256,17 @@ def handle_user_inputs(message):
 
             session["data"]["step1"] = text
             session["step"] = "STEP_2"
-            try:
-                bot.send_photo(chat_id, photo=IMG_STEP_2, caption="<b>Step 2:</b>", reply_markup=cancel_btn())
-            except Exception:
-                bot.send_message(chat_id, text="<b>Step 2:</b>", reply_markup=cancel_btn())
+            send_safe_photo(chat_id, IMG_STEP_2, caption="<b>Step 2:</b>", reply_markup=cancel_btn())
 
         elif step == "STEP_2":
             session["data"]["step2"] = text
             session["step"] = "STEP_3"
-            try:
-                bot.send_photo(chat_id, photo=IMG_STEP_3, caption="<b>Step 3:</b>", reply_markup=cancel_btn())
-            except Exception:
-                bot.send_message(chat_id, text="<b>Step 3:</b>", reply_markup=cancel_btn())
+            send_safe_photo(chat_id, IMG_STEP_3, caption="<b>Step 3:</b>", reply_markup=cancel_btn())
 
         elif step == "STEP_3":
             session["data"]["step3"] = text
             session["step"] = "STEP_4"
-            try:
-                bot.send_photo(chat_id, photo=IMG_STEP_4, caption="<b>Step 4:</b>", reply_markup=cancel_btn())
-            except Exception:
-                bot.send_message(chat_id, text="<b>Step 4:</b>", reply_markup=cancel_btn())
+            send_safe_photo(chat_id, IMG_STEP_4, caption="<b>Step 4:</b>", reply_markup=cancel_btn())
 
         elif step == "STEP_4":
             session["data"]["step4"] = text
@@ -273,10 +288,7 @@ def handle_user_inputs(message):
                 InlineKeyboardButton("Submit ✅", callback_data="btn_submit_final"),
                 InlineKeyboardButton("Cancel ❌", callback_data="btn_cancel"),
             )
-            try:
-                bot.send_photo(chat_id, photo=IMG_TASK_REVIEW_BOX, caption=summary, reply_markup=markup)
-            except Exception:
-                bot.send_message(chat_id, text=summary, reply_markup=markup)
+            send_safe_photo(chat_id, IMG_TASK_REVIEW_BOX, caption=summary, reply_markup=markup)
 
     # --- Withdrawal Address Input Flow ---
     elif flow == "WITHDRAW" and step == "AWAIT_ADDRESS":
@@ -288,7 +300,6 @@ def handle_user_inputs(message):
         wd_id = str(withdraw_counter)
         withdraw_counter += 1
 
-        # Deduct balance immediately
         user["balance"] = 0.0
         user_sessions.pop(user_id, None)
 
@@ -364,7 +375,7 @@ def handle_callbacks(call):
             try:
                 sent_msg = None
                 if img_url:
-                    sent_msg = bot.send_photo(chat_id=target_id, photo=img_url, caption=caption)
+                    sent_msg = send_safe_photo(target_id, img_url, caption=caption)
                 else:
                     sent_msg = bot.send_message(chat_id=target_id, text=caption)
 
@@ -417,10 +428,7 @@ def handle_callbacks(call):
             )
             markup = InlineKeyboardMarkup()
             markup.row(InlineKeyboardButton("🔙 Back", callback_data="btn_back"))
-            try:
-                bot.send_photo(chat_id, photo=IMG_TASK_SUBMITTED, caption=caption, reply_markup=markup)
-            except Exception:
-                bot.send_message(chat_id, text=caption, reply_markup=markup)
+            send_safe_photo(chat_id, IMG_TASK_SUBMITTED, caption=caption, reply_markup=markup)
 
             # Notify Admin
             admin_msg = (
@@ -521,7 +529,6 @@ def handle_callbacks(call):
 
         elif action == "rej":
             wd["status"] = "rejected"
-            # Refund the balance back to user
             t_user["balance"] += wd["amount"]
             try:
                 bot.send_message(
@@ -556,10 +563,7 @@ def handle_callbacks(call):
         markup.row(InlineKeyboardButton("📋 Submit Task", callback_data="btn_task"))
         markup.row(InlineKeyboardButton("📺 Tutorial", url=GUIDE_LINK))
         markup.row(InlineKeyboardButton("🔙 Back", callback_data="btn_back"))
-        try:
-            bot.send_photo(chat_id, photo=IMG_ACCOUNT_STATUS, caption=caption, reply_markup=markup)
-        except Exception:
-            bot.send_message(chat_id, text=caption, reply_markup=markup)
+        send_safe_photo(chat_id, IMG_ACCOUNT_STATUS, caption=caption, reply_markup=markup)
 
     elif call.data == "btn_balance":
         u = get_user(user_id)
@@ -572,10 +576,7 @@ def handle_callbacks(call):
         markup = InlineKeyboardMarkup()
         markup.row(InlineKeyboardButton("💳 Withdrawal", callback_data="btn_withdraw"))
         markup.row(InlineKeyboardButton("🔙 Back", callback_data="btn_back"))
-        try:
-            bot.send_photo(chat_id, photo=IMG_BALANCE, caption=caption, reply_markup=markup)
-        except Exception:
-            bot.send_message(chat_id, text=caption, reply_markup=markup)
+        send_safe_photo(chat_id, IMG_BALANCE, caption=caption, reply_markup=markup)
 
     elif call.data == "btn_referral":
         u = get_user(user_id)
@@ -596,10 +597,7 @@ def handle_callbacks(call):
         )
         markup = InlineKeyboardMarkup()
         markup.row(InlineKeyboardButton("🔙 Back", callback_data="btn_back"))
-        try:
-            bot.send_photo(chat_id, photo=IMG_REFERRAL, caption=caption, reply_markup=markup)
-        except Exception:
-            bot.send_message(chat_id, text=caption, reply_markup=markup)
+        send_safe_photo(chat_id, IMG_REFERRAL, caption=caption, reply_markup=markup)
 
     elif call.data == "btn_support":
         caption = (
@@ -609,10 +607,7 @@ def handle_callbacks(call):
         )
         markup = InlineKeyboardMarkup()
         markup.row(InlineKeyboardButton("🔙 Back", callback_data="btn_back"))
-        try:
-            bot.send_photo(chat_id, photo=IMG_SUPPORT, caption=caption, reply_markup=markup)
-        except Exception:
-            bot.send_message(chat_id, text=caption, reply_markup=markup)
+        send_safe_photo(chat_id, IMG_SUPPORT, caption=caption, reply_markup=markup)
 
     # --- Withdrawal Selection Menu ---
     elif call.data == "btn_withdraw":
@@ -645,5 +640,5 @@ def handle_callbacks(call):
 
 
 if __name__ == "__main__":
-    print("Bot is running...")
+    print("Bot is running with reliable image buffer streaming...")
     bot.infinity_polling(skip_pending=True)
