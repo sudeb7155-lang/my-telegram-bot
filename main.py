@@ -1,26 +1,26 @@
+import asyncio
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from telegram.ext import (
-    ApplicationBuilder,
+    Application,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
 )
 
-# 1. Put your BotFather token here
-BOT_TOKEN = "8932528165:AAGuepEKPlBSknT0Cn91KcTlSZlEOH5nh60"
+# 1. Put your actual bot token here
+BOT_TOKEN = ""
 
-# 2. Channel settings (Make sure your bot is an ADMIN in your channel)
+# 2. Channel settings (Make sure your bot is an ADMIN in this channel)
 CHANNEL_ID = "@googlejobhubsudeb"
 CHANNEL_LINK = "https://t.me/googlejobhubsudeb"
 GUIDE_LINK = "https://t.me/googlejobhubsudeb/3460"
 
-# 3. Your direct postimg link from earlier
+# 3. Direct image link
 BANNER_IMAGE_URL = "https://i.postimg.cc/ZRT1RJZ5/1787637100424.png"
 
 
-# Check if user is in the channel
 async def is_user_member(bot, user_id: int) -> bool:
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
@@ -29,7 +29,6 @@ async def is_user_member(bot, user_id: int) -> bool:
         return False
 
 
-# /start command handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
@@ -40,7 +39,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_join_prompt(chat_id, context)
 
 
-# Prompt user to join the channel
 async def send_join_prompt(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "⚠️ <b>Access Denied!</b>\n\n"
@@ -61,7 +59,6 @@ async def send_join_prompt(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# Handler for the "Check ✅" button
 async def handle_check_button(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ):
@@ -80,7 +77,6 @@ async def handle_check_button(
         )
 
 
-# Welcome banner with formatted text and button
 async def send_welcome_screen(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     caption = (
         "💼 <b>Complete Tasks and Get Paid!</b>\n\n"
@@ -106,8 +102,10 @@ async def send_welcome_screen(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    # Build application
+    app = Application.builder().token(BOT_TOKEN).build()
 
+    # Add handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(
         CallbackQueryHandler(
@@ -115,8 +113,8 @@ def main():
         )
     )
 
-    print("Bot is starting...")
-    app.run_polling()
+    print("Bot is starting polling...")
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
