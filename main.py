@@ -4,7 +4,7 @@ import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 # --- Configurations ---
-BOT_TOKEN = "8902730851:AAEd4YrKu4MDBM38p7jjlo1vf01Y11JRT6E"
+BOT_TOKEN = "8902730851:AAGkd2yeSywLUWdwGK7S-Q0RhTLMo84HpA0"
 ADMIN_ID = 6112720850
 
 CHANNEL_ID = "@googlejobhubsudeb"
